@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Debt Crew Ledger</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: "#1a1812",
+              sand: "#f6f1e7",
+              clay: "#e7dfcf",
+              accent: "#e4572e",
+              teal: "#0f7c7b",
+              night: "#2d2a20",
+            },
+            fontFamily: {
+              display: ["Fraunces", "Georgia", "serif"],
+              sans: ["Space Grotesk", "Trebuchet MS", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="min-h-screen bg-sand text-ink">
+    <div class="ambient"></div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Shared ledger</p>
+          <h1 class="title">Debt Crew</h1>
+          <p class="subtitle">Track who paid, who owes, and settle up fast.</p>
+        </div>
+        <div class="identity">
+          <div class="identity-card">
+            <p class="label">Operating as</p>
+            <p class="value" id="activeMemberName">Not set</p>
+            <p class="hint" id="authStatus">Connecting...</p>
+          </div>
+          <div class="identity-actions">
+            <button class="btn btn-primary" id="openIdentity">Switch Identity</button>
+            <button class="btn btn-ghost" id="refreshData">Refresh</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="main-grid grid-cols-1 lg:grid-cols-12">
+        <section class="panel lg:col-span-7" id="dashboardPanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Dashboard</h2>
+            <div class="panel-actions">
+              <button class="btn btn-primary" id="jumpAddEntry">Add Entry</button>
+              <button class="btn btn-ghost" id="jumpSettle">Settle Up</button>
+            </div>
+          </div>
+          <div class="panel-body grid lg:grid-cols-2 gap-6">
+            <div>
+              <h3 class="section-title">Net balances</h3>
+              <div id="netBalances" class="stack"></div>
+            </div>
+            <div>
+              <h3 class="section-title">Pairwise debts</h3>
+              <div id="pairwiseList" class="stack"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel lg:col-span-5" id="entryPanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Add Entry</h2>
+            <p class="panel-note" id="entryModeNote">Create a new transaction.</p>
+          </div>
+          <form id="entryForm" class="panel-body stack">
+            <div class="grid gap-4 sm:grid-cols-2">
+              <label class="field">
+                <span>Type</span>
+                <select id="entryType" class="input">
+                  <option value="LOAN">Loan</option>
+                  <option value="EXPENSE">Expense</option>
+                  <option value="SETTLEMENT">Settlement</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Event time</span>
+                <input id="eventAt" type="datetime-local" class="input" required />
+              </label>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+              <label class="field">
+                <span>Amount (VND)</span>
+                <input id="amountVnd" type="number" min="1" step="1" class="input" required />
+              </label>
+              <label class="field">
+                <span>Reason</span>
+                <input id="reason" type="text" class="input" placeholder="Dinner, taxi, tickets" />
+              </label>
+            </div>
+
+            <div id="loanFields" class="stack">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <label class="field">
+                  <span>Lender</span>
+                  <select id="loanFrom" class="input"></select>
+                </label>
+                <label class="field">
+                  <span>Borrower</span>
+                  <select id="loanTo" class="input"></select>
+                </label>
+              </div>
+            </div>
+
+            <div id="settlementFields" class="stack hidden">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <label class="field">
+                  <span>Payer</span>
+                  <select id="settleFrom" class="input"></select>
+                </label>
+                <label class="field">
+                  <span>Receiver</span>
+                  <select id="settleTo" class="input"></select>
+                </label>
+              </div>
+            </div>
+
+            <div id="expenseFields" class="stack hidden">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <label class="field">
+                  <span>Payer</span>
+                  <select id="expensePayer" class="input"></select>
+                </label>
+                <div class="field">
+                  <span>Split mode</span>
+                  <div class="pill-group">
+                    <label class="pill">
+                      <input type="radio" name="splitMode" value="equal" checked />
+                      Equal
+                    </label>
+                    <label class="pill">
+                      <input type="radio" name="splitMode" value="unequal" />
+                      Unequal (%)
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="participants-header">
+                  <span>Participants</span>
+                  <span class="muted" id="percentTotal">Total: 0%</span>
+                </div>
+                <div id="participantsList" class="participants"></div>
+                <p class="muted" id="shareTotal"></p>
+              </div>
+            </div>
+
+            <p id="formError" class="form-error hidden"></p>
+            <div class="flex flex-wrap gap-3">
+              <button type="submit" class="btn btn-primary" id="submitEntry">Save Entry</button>
+              <button type="button" class="btn btn-ghost hidden" id="cancelEdit">Cancel Edit</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel lg:col-span-7" id="ledgerPanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Ledger</h2>
+            <div class="panel-actions">
+              <label class="toggle">
+                <input type="checkbox" id="showDeleted" />
+                <span>Show deleted</span>
+              </label>
+            </div>
+          </div>
+          <div class="panel-body stack">
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label class="field">
+                <span>Filter type</span>
+                <select id="ledgerTypeFilter" class="input">
+                  <option value="ALL">All</option>
+                  <option value="LOAN">Loan</option>
+                  <option value="EXPENSE">Expense</option>
+                  <option value="SETTLEMENT">Settlement</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Filter member</span>
+                <select id="ledgerMemberFilter" class="input"></select>
+              </label>
+              <label class="field">
+                <span>From</span>
+                <input id="ledgerFrom" type="date" class="input" />
+              </label>
+              <label class="field">
+                <span>To</span>
+                <input id="ledgerTo" type="date" class="input" />
+              </label>
+            </div>
+            <div id="ledgerList" class="stack"></div>
+          </div>
+        </section>
+
+        <section class="panel lg:col-span-5" id="settlePanel">
+          <div class="panel-header">
+            <h2 class="panel-title">Settle Up</h2>
+          </div>
+          <div class="panel-body stack" id="settleList"></div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>Data is stored in Firebase. This identity check is for clarity only.</p>
+      </footer>
+    </div>
+
+    <div id="identityModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Choose identity</h3>
+          <button class="icon-btn" id="closeIdentity">Close</button>
+        </div>
+        <div class="stack">
+          <label class="field">
+            <span>Member</span>
+            <select id="identityMember" class="input"></select>
+          </label>
+          <label class="field">
+            <span>Birthday passcode</span>
+            <input id="identityPasscode" type="password" class="input" placeholder="DDMMYYYY" />
+          </label>
+          <p class="form-error hidden" id="identityError"></p>
+          <button class="btn btn-primary" id="confirmIdentity">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="detailModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card modal-wide">
+        <div class="modal-header">
+          <h3>Entry detail</h3>
+          <button class="icon-btn" id="closeDetail">Close</button>
+        </div>
+        <div id="detailBody" class="stack"></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="editEntry">Edit</button>
+          <button class="btn btn-ghost" id="restoreEntry">Restore</button>
+          <button class="btn btn-danger" id="deleteEntry">Soft delete</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
