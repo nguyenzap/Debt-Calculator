@@ -247,7 +247,7 @@ body {
 
 .participant-row {
   display: grid;
-  grid-template-columns: 1fr 100px 110px;
+  grid-template-columns: 1fr 140px;
   gap: 8px;
   align-items: center;
   background: rgba(255, 255, 255, 0.7);
@@ -410,10 +410,20 @@ body {
   }
 
   .participant-row {
-    grid-template-columns: 1fr 80px 90px;
+    grid-template-columns: 1fr 120px;
   }
 }
 
 .hidden {
   display: none;
+}
+
+body.locked .app-shell {
+  filter: blur(2px);
+  pointer-events: none;
+  user-select: none;
+}
+
+body.locked .modal {
+  pointer-events: auto;
 }

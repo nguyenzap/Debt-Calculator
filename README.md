@@ -5,7 +5,7 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 ## What this includes
 
 - Loans, expenses, settlements
-- Equal or percent-based splits (payer included)
+- Equal or amount-based splits (payer included)
 - Pairwise debts and net balances
 - Settle up suggestions (minimum transfers)
 - Soft delete and audit log
@@ -45,7 +45,7 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
   - Common: `type`, `amountVnd`, `reason`, `eventAt`, `createdAt`, `createdBy`, `updatedAt`, `updatedBy`, `isDeleted`, `deletedAt`, `deletedBy`
   - LOAN: `fromId`, `toId`
   - SETTLEMENT: `fromId`, `toId`
-  - EXPENSE: `payerId`, `participants: [{ memberId, percent, shareVnd }]`
+  - EXPENSE: `payerId`, `participants: [{ memberId, shareVnd }]`
 - `groups/{groupId}/transactions/{txId}/audit/{auditId}`
   - `action`, `at`, `by`, `before`, `after`
 
@@ -54,4 +54,3 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 - The birthday check is not security; it only labels UI actions.
 - The first load creates the group document if it does not exist.
 - Settle Up is a suggestion view. Record actual payments using SETTLEMENT entries.
-

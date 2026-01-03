@@ -121,13 +121,20 @@ function init() {
   wireEvents();
   loadCurrentMember();
   updateMemberSelects();
+  setIdentityLock(!state.currentMemberId);
+  if (!state.currentMemberId) {
+    openIdentityModal();
+  }
   setDefaultEventTime();
   startFirebase();
 }
 
 function wireEvents() {
   el.openIdentity.addEventListener("click", openIdentityModal);
-  el.closeIdentity.addEventListener("click", () => closeModal(el.identityModal));
+  el.closeIdentity.addEventListener("click", () => {
+    closeModal(el.identityModal);
+    setIdentityLock(false);
+  });
   el.confirmIdentity.addEventListener("click", confirmIdentity);
 
   el.refreshData.addEventListener("click", () => {
@@ -168,14 +175,14 @@ function wireEvents() {
       recalcParticipants();
     }
 
-    if (event.target.matches("input[data-percent]")) {
+    if (event.target.matches("input[data-share]")) {
       const value = parseInt(event.target.value, 10);
-      participant.percent = Number.isNaN(value) ? 0 : value;
-      recalcParticipants(false);
+      participant.shareVnd = Number.isNaN(value) ? 0 : value;
+      recalcParticipants();
     }
   });
 
-  el.amountVnd.addEventListener("input", () => recalcParticipants(false));
+  el.amountVnd.addEventListener("input", () => recalcParticipants());
 
   el.entryForm.addEventListener("submit", handleSubmit);
   el.cancelEdit.addEventListener("click", clearEdit);
@@ -272,6 +279,15 @@ function updateActiveMember() {
   el.activeMemberName.textContent = member ? member.displayName : "Not set";
 }
 
+function applyMemberDefaults() {
+  if (!state.currentMemberId) return;
+  el.loanFrom.value = state.currentMemberId;
+  el.settleFrom.value = state.currentMemberId;
+  el.expensePayer.value = state.currentMemberId;
+  ensurePayerIncluded();
+  recalcParticipants();
+}
+
 function loadCurrentMember() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved && state.members.some((entry) => entry.id === saved)) {
@@ -287,12 +303,14 @@ function reconcileCurrentMember() {
     state.currentMemberId = null;
     localStorage.removeItem(STORAGE_KEY);
   }
+  setIdentityLock(!state.currentMemberId);
 }
 
 function openIdentityModal() {
   el.identityMember.value = state.currentMemberId || state.members[0]?.id || "";
   el.identityPasscode.value = "";
   hideIdentityError();
+  setIdentityLock(!state.currentMemberId);
   openModal(el.identityModal);
 }
 
@@ -312,6 +330,8 @@ function confirmIdentity() {
   hideIdentityError();
   closeModal(el.identityModal);
   updateActiveMember();
+  applyMemberDefaults();
+  setIdentityLock(false);
 }
 
 function showIdentityError(message) {
@@ -344,13 +364,13 @@ function updateMemberSelects() {
   el.ledgerMemberFilter.innerHTML = ledgerOptions;
 
   initParticipants();
+  applyMemberDefaults();
 }
 
 function initParticipants() {
   state.expenseParticipants = state.members.map((member) => ({
     memberId: member.id,
     include: true,
-    percent: 0,
     shareVnd: 0,
   }));
   renderParticipants();
@@ -369,7 +389,7 @@ function renderParticipants() {
     .map((entry) => {
       const member = memberName(entry.memberId);
       const isPayer = entry.memberId === el.expensePayer.value;
-      const percentValue = Number.isNaN(entry.percent) ? 0 : entry.percent;
+      const shareValue = Number.isFinite(entry.shareVnd) ? entry.shareVnd : 0;
       return `
         <div class="participant-row">
           <div class="participant-name">
@@ -384,110 +404,91 @@ function renderParticipants() {
           <input
             type="number"
             min="0"
-            max="100"
             step="1"
             class="input"
             data-member-id="${entry.memberId}"
-            data-percent
-            value="${percentValue}"
-            ${state.splitMode === "equal" ? "disabled" : ""}
+            data-share
+            value="${shareValue}"
+            ${state.splitMode === "equal" || !entry.include ? "disabled" : ""}
           />
-          <div class="muted">${formatVnd(entry.shareVnd)}</div>
         </div>
       `;
     })
     .join("");
 
   el.participantsList.innerHTML = rows;
-  updatePercentTotal();
+  updateShareSummary();
 }
 
-function updatePercentTotal() {
-  const total = state.expenseParticipants
-    .filter((entry) => entry.include)
-    .reduce((sum, entry) => sum + (entry.percent || 0), 0);
-  el.percentTotal.textContent = `Total: ${total}%`;
-
+function updateShareSummary() {
   const totalShares = state.expenseParticipants
     .filter((entry) => entry.include)
     .reduce((sum, entry) => sum + (entry.shareVnd || 0), 0);
-  el.shareTotal.textContent = totalShares
-    ? `Share total: ${formatVnd(totalShares)}`
-    : "";
+  el.percentTotal.textContent = `Allocated: ${formatVnd(totalShares)}`;
+
+  const amount = parseInt(el.amountVnd.value, 10);
+  if (Number.isNaN(amount) || amount <= 0) {
+    el.shareTotal.textContent = "";
+    return;
+  }
+
+  const diff = amount - totalShares;
+  if (diff === 0) {
+    el.shareTotal.textContent = "Matches the amount.";
+  } else if (diff > 0) {
+    el.shareTotal.textContent = `Remaining: ${formatVnd(diff)}`;
+  } else {
+    el.shareTotal.textContent = `Over by: ${formatVnd(Math.abs(diff))}`;
+  }
 }
 
-function recalcParticipants(resetEqual = true) {
+function recalcParticipants() {
+  state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+    ...entry,
+    shareVnd: entry.include ? entry.shareVnd : 0,
+  }));
+
   const included = state.expenseParticipants.filter((entry) => entry.include);
   if (!included.length) {
     renderParticipants();
     return;
   }
 
-  if (state.splitMode === "equal" && resetEqual) {
-    applyEqualPercents(included);
-  }
-
   const amount = parseInt(el.amountVnd.value, 10);
-  if (!Number.isNaN(amount) && amount > 0) {
-    calculateShares(amount);
-  } else {
-    state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-      ...entry,
-      shareVnd: 0,
-    }));
+  if (state.splitMode === "equal") {
+    if (!Number.isNaN(amount) && amount > 0) {
+      applyEqualShares(amount);
+    } else {
+      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+        ...entry,
+        shareVnd: entry.include ? 0 : entry.shareVnd,
+      }));
+    }
   }
 
   renderParticipants();
 }
 
-function applyEqualPercents(included) {
+function applyEqualShares(amount) {
+  const included = state.expenseParticipants.filter((entry) => entry.include);
   const count = included.length;
-  const base = Math.floor(100 / count);
-  const remainder = 100 - base * count;
+  if (!count) return;
+
+  const base = Math.floor(amount / count);
+  const remainder = amount - base * count;
   const ordered = [...included].sort((a, b) =>
     a.memberId.localeCompare(b.memberId)
   );
 
+  const shareById = new Map();
   ordered.forEach((entry, index) => {
-    const extra = index < remainder ? 1 : 0;
-    entry.percent = base + extra;
-  });
-}
-
-function calculateShares(amount) {
-  const included = state.expenseParticipants.filter((entry) => entry.include);
-  const ordered = [...included].sort((a, b) => {
-    if (b.percent !== a.percent) {
-      return b.percent - a.percent;
-    }
-    return a.memberId.localeCompare(b.memberId);
+    shareById.set(entry.memberId, base + (index < remainder ? 1 : 0));
   });
 
-  const baseShares = included.map((entry) => ({
-    memberId: entry.memberId,
-    percent: entry.percent || 0,
-    base: Math.floor((amount * (entry.percent || 0)) / 100),
+  state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+    ...entry,
+    shareVnd: entry.include ? shareById.get(entry.memberId) || 0 : 0,
   }));
-
-  let totalBase = baseShares.reduce((sum, entry) => sum + entry.base, 0);
-  let remainder = amount - totalBase;
-
-  ordered.forEach((entry) => {
-    const shareEntry = baseShares.find((row) => row.memberId === entry.memberId);
-    if (!shareEntry) return;
-    if (remainder > 0) {
-      shareEntry.base += 1;
-      remainder -= 1;
-    }
-  });
-
-  state.expenseParticipants = state.expenseParticipants.map((entry) => {
-    const shareEntry = baseShares.find((row) => row.memberId === entry.memberId);
-    return {
-      ...entry,
-      shareVnd: shareEntry ? shareEntry.base : 0,
-    };
-  });
 }
 
 function updateEntryType() {
@@ -495,6 +496,10 @@ function updateEntryType() {
   el.loanFields.classList.toggle("hidden", type !== "LOAN");
   el.expenseFields.classList.toggle("hidden", type !== "EXPENSE");
   el.settlementFields.classList.toggle("hidden", type !== "SETTLEMENT");
+  if (type === "EXPENSE") {
+    ensurePayerIncluded();
+    recalcParticipants();
+  }
   setDefaultEventTime();
 }
 
@@ -570,31 +575,22 @@ async function handleSubmit(event) {
   }
 
   if (type === "EXPENSE") {
-    if (state.splitMode === "unequal") {
-      const totalPercent = state.expenseParticipants
-        .filter((entry) => entry.include)
-        .reduce((sum, entry) => sum + (entry.percent || 0), 0);
-      if (totalPercent !== 100) {
-        showFormError("Percent split must total 100.");
-        return;
-      }
-    }
-
     const payerId = el.expensePayer.value;
     ensurePayerIncluded();
-    calculateShares(amount);
+    if (state.splitMode === "equal") {
+      applyEqualShares(amount);
+    }
 
     const participants = state.expenseParticipants
       .filter((entry) => entry.include)
       .map((entry) => ({
         memberId: entry.memberId,
-        percent: entry.percent || 0,
         shareVnd: entry.shareVnd || 0,
       }));
 
     const shareTotal = participants.reduce((sum, entry) => sum + entry.shareVnd, 0);
     if (shareTotal !== amount) {
-      showFormError("Share total must equal the amount.");
+      showFormError("Allocated shares must equal the amount.");
       return;
     }
 
@@ -674,6 +670,7 @@ async function saveTransaction(payload) {
   recalcParticipants();
   updateEntryType();
   setDefaultEventTime();
+  applyMemberDefaults();
 }
 
 async function addAudit(txId, { action, before, after }) {
@@ -1195,7 +1192,6 @@ function startEditSelected() {
       return {
         memberId: member.id,
         include: Boolean(existing),
-        percent: existing ? existing.percent : 0,
         shareVnd: existing ? existing.shareVnd : 0,
       };
     });
@@ -1223,6 +1219,7 @@ function clearEdit() {
   initParticipants();
   recalcParticipants();
   updateEntryType();
+  applyMemberDefaults();
 }
 
 async function softDeleteSelected() {
@@ -1282,6 +1279,12 @@ async function restoreSelected() {
   });
 
   closeModal(el.detailModal);
+}
+
+function setIdentityLock(locked) {
+  document.body.classList.toggle("locked", locked);
+  el.closeIdentity.classList.toggle("hidden", locked);
+  el.closeIdentity.disabled = locked;
 }
 
 function openModal(modal) {
