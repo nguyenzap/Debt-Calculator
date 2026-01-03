@@ -59,6 +59,7 @@ const state = {
   showDeleted: false,
   splitMode: "equal",
   expenseParticipants: [],
+  eventAtDirty: false,
 };
 
 const el = {
@@ -145,6 +146,7 @@ function wireEvents() {
   });
 
   el.jumpAddEntry.addEventListener("click", () => scrollToId("entryPanel"));
+  el.jumpAddEntry.addEventListener("click", refreshEventTimeIfAuto);
   el.jumpSettle.addEventListener("click", () => scrollToId("settlePanel"));
 
   el.entryType.addEventListener("change", updateEntryType);
@@ -182,9 +184,24 @@ function wireEvents() {
     }
   });
 
-  el.amountVnd.addEventListener("input", () => recalcParticipants());
+  el.amountVnd.addEventListener("input", () => {
+    refreshEventTimeIfAuto();
+    recalcParticipants();
+  });
+  el.reason.addEventListener("input", refreshEventTimeIfAuto);
+  const markEventAtDirty = () => {
+    state.eventAtDirty = true;
+  };
+  el.eventAt.addEventListener("input", markEventAtDirty);
+  el.eventAt.addEventListener("change", markEventAtDirty);
 
   el.entryForm.addEventListener("submit", handleSubmit);
+  el.entryForm.addEventListener("focusin", refreshEventTimeIfAuto);
+  el.entryForm.addEventListener("change", (event) => {
+    if (event.target !== el.eventAt) {
+      refreshEventTimeIfAuto();
+    }
+  });
   el.cancelEdit.addEventListener("click", clearEdit);
 
   el.ledgerTypeFilter.addEventListener("change", renderLedger);
@@ -504,9 +521,8 @@ function updateEntryType() {
 }
 
 function setDefaultEventTime() {
-  if (!el.eventAt.value) {
-    el.eventAt.value = toLocalInputValue(new Date());
-  }
+  if (state.editingTxId) return;
+  refreshEventTimeIfAuto();
 }
 
 async function handleSubmit(event) {
@@ -525,7 +541,15 @@ async function handleSubmit(event) {
     return;
   }
 
-  const eventAt = toTimestamp(el.eventAt.value);
+  const isEditing = Boolean(state.editingTxId);
+  let eventAt = null;
+  if (!isEditing && !state.eventAtDirty) {
+    const now = new Date();
+    el.eventAt.value = toLocalInputValue(now);
+    eventAt = Timestamp.fromDate(now);
+  } else {
+    eventAt = toTimestamp(el.eventAt.value);
+  }
   if (!eventAt) {
     showFormError("Event time is required.");
     return;
@@ -662,6 +686,7 @@ async function saveTransaction(payload) {
 
   el.entryForm.reset();
   state.splitMode = "equal";
+  state.eventAtDirty = false;
   const equalRadio = document.querySelector(
     "input[name='splitMode'][value='equal']"
   );
@@ -1215,6 +1240,7 @@ function clearEdit() {
   el.entryForm.reset();
   setDefaultEventTime();
   state.splitMode = "equal";
+  state.eventAtDirty = false;
   document.querySelector("input[name='splitMode'][value='equal']").checked = true;
   initParticipants();
   recalcParticipants();
@@ -1285,6 +1311,11 @@ function setIdentityLock(locked) {
   document.body.classList.toggle("locked", locked);
   el.closeIdentity.classList.toggle("hidden", locked);
   el.closeIdentity.disabled = locked;
+}
+
+function refreshEventTimeIfAuto() {
+  if (state.editingTxId || state.eventAtDirty) return;
+  el.eventAt.value = toLocalInputValue(new Date());
 }
 
 function openModal(modal) {
