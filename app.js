@@ -551,7 +551,11 @@ async function handleSubmit(event) {
     eventAt = toTimestamp(el.eventAt.value);
   }
   if (!eventAt) {
-    showFormError("Event time is required.");
+    if (!el.eventAt.value.trim()) {
+      showFormError("Event time is required.");
+    } else {
+      showFormError("Event time must be DD-MM-YYYY HH:mm.");
+    }
     return;
   }
 
@@ -1357,6 +1361,12 @@ function memberName(memberId) {
 
 function toTimestamp(value) {
   if (!value) return null;
+  if (value instanceof Date) return Timestamp.fromDate(value);
+  if (typeof value === "string") {
+    const parsed = parseDateTimeInput(value);
+    if (!parsed) return null;
+    return Timestamp.fromDate(parsed);
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return Timestamp.fromDate(date);
@@ -1384,9 +1394,55 @@ function formatDateTime(date) {
 function toLocalInputValue(date) {
   if (!date) return "";
   const pad = (num) => String(num).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate()
-  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeInput(value) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^(\\d{2})[\\/\\-](\\d{2})[\\/\\-](\\d{4})[ T](\\d{2}):(\\d{2})$/
+  );
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  if (
+    Number.isNaN(day) ||
+    Number.isNaN(month) ||
+    Number.isNaN(year) ||
+    Number.isNaN(hour) ||
+    Number.isNaN(minute)
+  ) {
+    return null;
+  }
+  if (
+    day < 1 ||
+    day > 31 ||
+    month < 1 ||
+    month > 12 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day ||
+    date.getHours() !== hour ||
+    date.getMinutes() !== minute
+  ) {
+    return null;
+  }
+  return date;
 }
 
 function formatJson(value) {
