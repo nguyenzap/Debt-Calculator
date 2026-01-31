@@ -72,6 +72,8 @@ const el = {
   entryForm: document.getElementById("entryForm"),
   entryType: document.getElementById("entryType"),
   eventAt: document.getElementById("eventAt"),
+  eventAtPickerBtn: document.getElementById("eventAtPickerBtn"),
+  eventAtPicker: document.getElementById("eventAtPicker"),
   amountVnd: document.getElementById("amountVnd"),
   reason: document.getElementById("reason"),
   loanFields: document.getElementById("loanFields"),
@@ -173,15 +175,33 @@ function wireEvents() {
 
     if (event.target.matches("input[type='checkbox']")) {
       participant.include = event.target.checked;
+      if (!participant.include) {
+        participant.locked = false;
+        participant.shareVnd = 0;
+      }
       ensurePayerIncluded();
       recalcParticipants();
     }
 
     if (event.target.matches("input[data-share]")) {
       const value = parseInt(event.target.value, 10);
-      participant.shareVnd = Number.isNaN(value) ? 0 : value;
+      participant.shareVnd = Number.isNaN(value) ? 0 : Math.max(0, value);
+      if (state.splitMode === "unequal") {
+        participant.locked = true;
+      }
       recalcParticipants();
     }
+  });
+
+  el.participantsList.addEventListener("click", (event) => {
+    const memberId = event.target.dataset.lock;
+    if (!memberId || state.splitMode === "equal") return;
+    const participant = state.expenseParticipants.find(
+      (entry) => entry.memberId === memberId
+    );
+    if (!participant || !participant.include) return;
+    participant.locked = !participant.locked;
+    recalcParticipants();
   });
 
   el.amountVnd.addEventListener("input", () => {
@@ -191,9 +211,22 @@ function wireEvents() {
   el.reason.addEventListener("input", refreshEventTimeIfAuto);
   const markEventAtDirty = () => {
     state.eventAtDirty = true;
+    const parsed = parseDateTimeInput(el.eventAt.value);
+    if (parsed) {
+      syncEventPickerValue(parsed);
+    }
   };
   el.eventAt.addEventListener("input", markEventAtDirty);
   el.eventAt.addEventListener("change", markEventAtDirty);
+  el.eventAtPickerBtn.addEventListener("click", toggleEventPicker);
+  el.eventAtPicker.addEventListener("change", () => {
+    if (!el.eventAtPicker.value) return;
+    const date = new Date(el.eventAtPicker.value);
+    if (!Number.isNaN(date.getTime())) {
+      setEventAtValue(date, true);
+    }
+    el.eventAtPicker.classList.add("hidden");
+  });
 
   el.entryForm.addEventListener("submit", handleSubmit);
   el.entryForm.addEventListener("focusin", refreshEventTimeIfAuto);
@@ -389,6 +422,7 @@ function initParticipants() {
     memberId: member.id,
     include: true,
     shareVnd: 0,
+    locked: false,
   }));
   renderParticipants();
 }
@@ -407,6 +441,9 @@ function renderParticipants() {
       const member = memberName(entry.memberId);
       const isPayer = entry.memberId === el.expensePayer.value;
       const shareValue = Number.isFinite(entry.shareVnd) ? entry.shareVnd : 0;
+      const lockLabel = entry.locked ? "Locked" : "Auto";
+      const lockClass = entry.locked ? "active" : "";
+      const lockDisabled = state.splitMode === "equal" || !entry.include;
       return `
         <div class="participant-row">
           <div class="participant-name">
@@ -428,6 +465,14 @@ function renderParticipants() {
             value="${shareValue}"
             ${state.splitMode === "equal" || !entry.include ? "disabled" : ""}
           />
+          <button
+            type="button"
+            class="lock-btn ${lockClass}"
+            data-lock="${entry.memberId}"
+            ${lockDisabled ? "disabled" : ""}
+          >
+            ${lockLabel}
+          </button>
         </div>
       `;
     })
@@ -462,7 +507,8 @@ function updateShareSummary() {
 function recalcParticipants() {
   state.expenseParticipants = state.expenseParticipants.map((entry) => ({
     ...entry,
-    shareVnd: entry.include ? entry.shareVnd : 0,
+    shareVnd: entry.include ? Math.max(0, Number(entry.shareVnd) || 0) : 0,
+    locked: entry.include ? Boolean(entry.locked) : false,
   }));
 
   const included = state.expenseParticipants.filter((entry) => entry.include);
@@ -473,6 +519,10 @@ function recalcParticipants() {
 
   const amount = parseInt(el.amountVnd.value, 10);
   if (state.splitMode === "equal") {
+    state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+      ...entry,
+      locked: false,
+    }));
     if (!Number.isNaN(amount) && amount > 0) {
       applyEqualShares(amount);
     } else {
@@ -481,31 +531,77 @@ function recalcParticipants() {
         shareVnd: entry.include ? 0 : entry.shareVnd,
       }));
     }
+  } else {
+    if (Number.isNaN(amount) || amount <= 0) {
+      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+        ...entry,
+        shareVnd: entry.include && !entry.locked ? 0 : entry.shareVnd,
+      }));
+      renderParticipants();
+      return;
+    }
+
+    const lockedEntries = included.filter((entry) => entry.locked);
+    const unlockedEntries = included.filter((entry) => !entry.locked);
+    const lockedTotal = lockedEntries.reduce(
+      (sum, entry) => sum + (entry.shareVnd || 0),
+      0
+    );
+
+    if (!unlockedEntries.length) {
+      renderParticipants();
+      return;
+    }
+
+    const remaining = amount - lockedTotal;
+    if (remaining < 0) {
+      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
+        ...entry,
+        shareVnd: entry.include && !entry.locked ? 0 : entry.shareVnd,
+      }));
+      renderParticipants();
+      return;
+    }
+
+    const shareById = buildEqualSharesMap(
+      remaining,
+      unlockedEntries.map((entry) => entry.memberId)
+    );
+
+    state.expenseParticipants = state.expenseParticipants.map((entry) => {
+      if (!entry.include || entry.locked) return entry;
+      return {
+        ...entry,
+        shareVnd: shareById.get(entry.memberId) || 0,
+      };
+    });
   }
 
   renderParticipants();
 }
 
 function applyEqualShares(amount) {
-  const included = state.expenseParticipants.filter((entry) => entry.include);
-  const count = included.length;
-  if (!count) return;
-
-  const base = Math.floor(amount / count);
-  const remainder = amount - base * count;
-  const ordered = [...included].sort((a, b) =>
-    a.memberId.localeCompare(b.memberId)
-  );
-
-  const shareById = new Map();
-  ordered.forEach((entry, index) => {
-    shareById.set(entry.memberId, base + (index < remainder ? 1 : 0));
-  });
-
+  const memberIds = state.expenseParticipants
+    .filter((entry) => entry.include)
+    .map((entry) => entry.memberId);
+  const shareById = buildEqualSharesMap(amount, memberIds);
   state.expenseParticipants = state.expenseParticipants.map((entry) => ({
     ...entry,
     shareVnd: entry.include ? shareById.get(entry.memberId) || 0 : 0,
   }));
+}
+
+function buildEqualSharesMap(amount, memberIds) {
+  const count = memberIds.length;
+  const shareById = new Map();
+  if (!count) return shareById;
+  const base = Math.floor(amount / count);
+  const remainder = amount - base * count;
+  const ordered = [...memberIds].sort((a, b) => a.localeCompare(b));
+  ordered.forEach((memberId, index) => {
+    shareById.set(memberId, base + (index < remainder ? 1 : 0));
+  });
+  return shareById;
 }
 
 function updateEntryType() {
@@ -545,7 +641,7 @@ async function handleSubmit(event) {
   let eventAt = null;
   if (!isEditing && !state.eventAtDirty) {
     const now = new Date();
-    el.eventAt.value = toLocalInputValue(now);
+    setEventAtValue(now);
     eventAt = Timestamp.fromDate(now);
   } else {
     eventAt = toTimestamp(el.eventAt.value);
@@ -691,6 +787,7 @@ async function saveTransaction(payload) {
   el.entryForm.reset();
   state.splitMode = "equal";
   state.eventAtDirty = false;
+  el.eventAtPicker.classList.add("hidden");
   const equalRadio = document.querySelector(
     "input[name='splitMode'][value='equal']"
   );
@@ -996,7 +1093,7 @@ function prefillSettlement(fromId, toId, amount) {
   el.settleTo.value = toId;
   el.amountVnd.value = amount;
   el.reason.value = "Settlement";
-  el.eventAt.value = toLocalInputValue(new Date());
+  setEventAtValue(new Date());
   scrollToId("entryPanel");
 }
 
@@ -1198,7 +1295,7 @@ function startEditSelected() {
   updateEntryType();
   el.amountVnd.value = entry.amountVnd || "";
   el.reason.value = entry.reason || "";
-  el.eventAt.value = toLocalInputValue(getEventDate(entry));
+  setEventAtValue(getEventDate(entry), true);
 
   if (entry.type === "LOAN") {
     el.loanFrom.value = entry.fromId;
@@ -1222,6 +1319,7 @@ function startEditSelected() {
         memberId: member.id,
         include: Boolean(existing),
         shareVnd: existing ? existing.shareVnd : 0,
+        locked: Boolean(existing),
       };
     });
     ensurePayerIncluded();
@@ -1245,6 +1343,7 @@ function clearEdit() {
   setDefaultEventTime();
   state.splitMode = "equal";
   state.eventAtDirty = false;
+  el.eventAtPicker.classList.add("hidden");
   document.querySelector("input[name='splitMode'][value='equal']").checked = true;
   initParticipants();
   recalcParticipants();
@@ -1319,7 +1418,41 @@ function setIdentityLock(locked) {
 
 function refreshEventTimeIfAuto() {
   if (state.editingTxId || state.eventAtDirty) return;
-  el.eventAt.value = toLocalInputValue(new Date());
+  setEventAtValue(new Date());
+}
+
+function toggleEventPicker() {
+  if (!el.eventAtPicker.classList.contains("hidden")) {
+    el.eventAtPicker.classList.add("hidden");
+    return;
+  }
+  el.eventAtPicker.classList.remove("hidden");
+  if (typeof el.eventAtPicker.showPicker === "function") {
+    el.eventAtPicker.showPicker();
+  } else {
+    el.eventAtPicker.focus();
+  }
+}
+
+function setEventAtValue(date, markDirty = false) {
+  if (!date || Number.isNaN(date.getTime())) return;
+  el.eventAt.value = toLocalInputValue(date);
+  syncEventPickerValue(date);
+  if (markDirty) {
+    state.eventAtDirty = true;
+  }
+}
+
+function syncEventPickerValue(date) {
+  if (!el.eventAtPicker) return;
+  el.eventAtPicker.value = toPickerInputValue(date);
+}
+
+function toPickerInputValue(date) {
+  const pad = (num) => String(num).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function openModal(modal) {
@@ -1403,7 +1536,7 @@ function parseDateTimeInput(value) {
   if (!value) return null;
   const trimmed = value.trim();
   const match = trimmed.match(
-    /^(\\d{2})[\\/\\-](\\d{2})[\\/\\-](\\d{4})[ T](\\d{2}):(\\d{2})$/
+    /^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{4})[ T](\\d{1,2}):(\\d{1,2})$/
   );
   if (!match) return null;
   const day = Number(match[1]);

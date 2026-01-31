@@ -6,6 +6,7 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 
 - Loans, expenses, settlements
 - Equal or amount-based splits (payer included)
+  - Unequal mode supports locking participants and auto-splitting the remaining amount
 - Pairwise debts and net balances
 - Settle up suggestions (minimum transfers)
 - Soft delete and audit log
@@ -55,3 +56,4 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 - The first load creates the group document if it does not exist.
 - Settle Up is a suggestion view. Record actual payments using SETTLEMENT entries.
 - Event time input format: `DD-MM-YYYY HH:mm` (24-hour).
+  - Use the picker button for easier selection.

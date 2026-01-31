@@ -94,15 +94,26 @@
               </label>
               <label class="field">
                 <span>Event time</span>
+                <div class="event-time-row">
+                  <input
+                    id="eventAt"
+                    type="text"
+                    class="input"
+                    inputmode="numeric"
+                    placeholder="DD-MM-YYYY HH:mm"
+                    title="Format: DD-MM-YYYY HH:mm (24-hour)"
+                    autocomplete="off"
+                    required
+                  />
+                  <button type="button" class="btn btn-ghost" id="eventAtPickerBtn">
+                    Pick
+                  </button>
+                </div>
                 <input
-                  id="eventAt"
-                  type="text"
-                  class="input"
-                  inputmode="numeric"
-                  placeholder="DD-MM-YYYY HH:mm"
-                  title="Format: DD-MM-YYYY HH:mm (24-hour)"
-                  autocomplete="off"
-                  required
+                  id="eventAtPicker"
+                  type="datetime-local"
+                  class="input hidden"
+                  step="60"
                 />
               </label>
             </div>
