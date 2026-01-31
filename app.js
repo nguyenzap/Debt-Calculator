@@ -209,15 +209,6 @@ function wireEvents() {
     recalcParticipants();
   });
   el.reason.addEventListener("input", refreshEventTimeIfAuto);
-  const markEventAtDirty = () => {
-    state.eventAtDirty = true;
-    const parsed = parseDateTimeInput(el.eventAt.value);
-    if (parsed) {
-      syncEventPickerValue(parsed);
-    }
-  };
-  el.eventAt.addEventListener("input", markEventAtDirty);
-  el.eventAt.addEventListener("change", markEventAtDirty);
   el.eventAtPickerBtn.addEventListener("click", toggleEventPicker);
   el.eventAtPicker.addEventListener("change", () => {
     if (!el.eventAtPicker.value) return;
@@ -227,6 +218,11 @@ function wireEvents() {
     }
     el.eventAtPicker.classList.add("hidden");
   });
+  const blockPickerTyping = (event) => {
+    event.preventDefault();
+  };
+  el.eventAtPicker.addEventListener("keydown", blockPickerTyping);
+  el.eventAtPicker.addEventListener("paste", blockPickerTyping);
 
   el.entryForm.addEventListener("submit", handleSubmit);
   el.entryForm.addEventListener("focusin", refreshEventTimeIfAuto);
@@ -638,22 +634,18 @@ async function handleSubmit(event) {
   }
 
   const isEditing = Boolean(state.editingTxId);
-  let eventAt = null;
+  let eventAtDate = null;
   if (!isEditing && !state.eventAtDirty) {
-    const now = new Date();
-    setEventAtValue(now);
-    eventAt = Timestamp.fromDate(now);
+    eventAtDate = new Date();
+    setEventAtValue(eventAtDate);
   } else {
-    eventAt = toTimestamp(el.eventAt.value);
+    eventAtDate = getPickerDate();
   }
-  if (!eventAt) {
-    if (!el.eventAt.value.trim()) {
-      showFormError("Event time is required.");
-    } else {
-      showFormError("Event time must be DD-MM-YYYY HH:mm.");
-    }
+  if (!eventAtDate) {
+    showFormError("Pick an event time.");
     return;
   }
+  const eventAt = Timestamp.fromDate(eventAtDate);
 
   const reason = el.reason.value.trim();
   const commonFields = {
@@ -1443,6 +1435,13 @@ function setEventAtValue(date, markDirty = false) {
   }
 }
 
+function getPickerDate() {
+  if (!el.eventAtPicker || !el.eventAtPicker.value) return null;
+  const date = new Date(el.eventAtPicker.value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
 function syncEventPickerValue(date) {
   if (!el.eventAtPicker) return;
   el.eventAtPicker.value = toPickerInputValue(date);
@@ -1492,19 +1491,6 @@ function memberName(memberId) {
   return member ? member.displayName : memberId || "Unknown";
 }
 
-function toTimestamp(value) {
-  if (!value) return null;
-  if (value instanceof Date) return Timestamp.fromDate(value);
-  if (typeof value === "string") {
-    const parsed = parseDateTimeInput(value);
-    if (!parsed) return null;
-    return Timestamp.fromDate(parsed);
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return Timestamp.fromDate(date);
-}
-
 function toDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
@@ -1530,52 +1516,6 @@ function toLocalInputValue(date) {
   return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(
     date.getHours()
   )}:${pad(date.getMinutes())}`;
-}
-
-function parseDateTimeInput(value) {
-  if (!value) return null;
-  const trimmed = value.trim();
-  const match = trimmed.match(
-    /^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{4})[ T](\\d{1,2}):(\\d{1,2})$/
-  );
-  if (!match) return null;
-  const day = Number(match[1]);
-  const month = Number(match[2]);
-  const year = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  if (
-    Number.isNaN(day) ||
-    Number.isNaN(month) ||
-    Number.isNaN(year) ||
-    Number.isNaN(hour) ||
-    Number.isNaN(minute)
-  ) {
-    return null;
-  }
-  if (
-    day < 1 ||
-    day > 31 ||
-    month < 1 ||
-    month > 12 ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    return null;
-  }
-  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day ||
-    date.getHours() !== hour ||
-    date.getMinutes() !== minute
-  ) {
-    return null;
-  }
-  return date;
 }
 
 function formatJson(value) {
