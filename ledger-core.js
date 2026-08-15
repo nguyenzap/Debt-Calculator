@@ -415,6 +415,42 @@ export function buildContributions(transactions = [], deltaFor = () => ({ amount
   return { rows, total: running };
 }
 
+// Turn a long contribution trace into human-sized chapters. A chapter closes
+// whenever a payment is recorded, or whenever the running balance reaches zero.
+export function buildJourneyChapters(rows = []) {
+  const chapters = [];
+  let pending = [];
+
+  const closeChapter = (boundary) => {
+    if (!pending.length) return;
+    const first = pending[0];
+    const last = pending[pending.length - 1];
+    chapters.push({
+      rows: pending,
+      boundary,
+      before: finiteNumber(first.running) - finiteNumber(first.delta),
+      after: finiteNumber(last.running),
+      startDate: first.date || null,
+      endDate: last.date || null,
+      netChange:
+        finiteNumber(last.running) -
+        (finiteNumber(first.running) - finiteNumber(first.delta)),
+    });
+    pending = [];
+  };
+
+  rows.forEach((row) => {
+    pending.push(row);
+    if (finiteNumber(row.running) === 0) {
+      closeChapter("square");
+    } else if (row.type === "SETTLEMENT") {
+      closeChapter("settlement");
+    }
+  });
+  closeChapter("open");
+  return chapters;
+}
+
 export function describeTransaction(transaction, options = {}) {
   const { nameOf, money } = explanationContext(options);
   const amount = money(positiveAmount(transaction.amountVnd));

@@ -9,7 +9,8 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with four f
   - Unequal mode supports locking participants and auto-splitting the remaining amount
 - Pairwise debts and net balances
 - Personalized "you owe" / "owed to you" overview with chronological explanations
-- Reason-first activity search, categories, responsive navigation, and a debt network map
+- Reason-first activity search, categories, responsive navigation, and a personal balance-journey chart
+- Collapsible debt chapters grouped by settlements and square-up moments
 - One-click JSON download of members and transactions for a portable manual snapshot
 - Practical settle-up suggestions
 - Soft delete and audit log

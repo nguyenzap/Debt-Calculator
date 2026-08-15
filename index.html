@@ -32,7 +32,7 @@
           <button class="nav-item active" type="button" data-view-target="overview" aria-current="page">Overview</button>
           <button class="nav-item" type="button" data-view-target="activity">Activity</button>
           <button class="nav-item" type="button" data-view-target="settle">Settle up</button>
-          <button class="nav-item" type="button" data-view-target="network">Network</button>
+          <button class="nav-item" type="button" data-view-target="journey">Journey</button>
         </nav>
 
         <div class="header-actions">
@@ -127,8 +127,8 @@
                   <h2 id="groupBalancesTitle">Group net balances</h2>
                   <p>A positive balance means that person should receive money overall.</p>
                 </div>
-                <button class="text-action" type="button" data-view-target="network">
-                  Open money map <span aria-hidden="true">&rarr;</span>
+                <button class="text-action" type="button" data-view-target="journey">
+                  Open balance journey <span aria-hidden="true">&rarr;</span>
                 </button>
               </div>
               <div class="group-balance-grid" id="netBalances"></div>
@@ -215,38 +215,59 @@
                 The plan combines every active loan, shared expense and recorded payment into one net balance per person.
                 Recording a payment adds a settlement entry; it never removes the original reasons.
               </p>
-              <button class="text-action" type="button" data-view-target="network">See the group money map</button>
+              <button class="text-action" type="button" data-view-target="journey">See your balance journey</button>
             </aside>
           </div>
         </section>
 
-        <section class="app-view hidden" id="networkPanel" data-view-panel="network" aria-labelledby="networkTitle">
+        <section class="app-view hidden" id="journeyPanel" data-view-panel="journey" aria-labelledby="journeyTitle">
           <div class="view-heading">
             <div>
-              <p class="eyebrow">Visual debt map</p>
-              <h1 id="networkTitle">See how money moves through the group.</h1>
+              <p class="eyebrow">Your balance story</p>
+              <h1 id="journeyTitle">See how you arrived at today&apos;s balance.</h1>
               <p class="view-intro">
-                Arrows point from the person who owes toward the person who should receive. Select any relationship for its history.
+                Follow the rise and fall of your balance, then open a chapter to inspect the expenses, loans and payments inside it.
               </p>
             </div>
             <button class="btn btn-primary" type="button" data-open-entry><span aria-hidden="true">+</span> Add entry</button>
           </div>
 
-          <section class="surface network-surface">
-            <div class="network-legend" aria-label="Network legend">
-              <span><i class="legend-node current"></i> You</span>
-              <span><i class="legend-node person"></i> Other person</span>
-              <span><i class="legend-line"></i> Owes money to</span>
+          <section class="surface journey-surface" aria-labelledby="journeyChartTitle">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="surface-kicker">Balance over time</p>
+                <h2 id="journeyChartTitle">The shape of your debt</h2>
+                <p id="journeySummary" role="status" aria-live="polite">Waiting for ledger data.</p>
+              </div>
             </div>
-            <div class="network-graph" id="networkGraph" role="group" aria-label="Interactive graph of current pairwise debts"></div>
-            <p class="network-help">Select a person or arrow for the complete explanation. On a phone, scroll the map sideways or use the list below.</p>
+            <div class="journey-legend" aria-label="Chart legend">
+              <span><i class="journey-key receive"></i> Money owed to you</span>
+              <span><i class="journey-key owe"></i> Money you owe</span>
+              <span><i class="journey-key payment"></i> Payment checkpoint</span>
+            </div>
+            <div class="journey-chart" id="journeyChart"></div>
           </section>
 
-          <section class="surface network-list-surface" aria-labelledby="allRelationshipsTitle">
+          <section class="surface journey-chapter-surface" aria-labelledby="journeyChaptersTitle">
             <div class="surface-header compact-header">
-              <div><p class="surface-kicker">Accessible list</p><h2 id="allRelationshipsTitle">Every open relationship</h2></div>
+              <div>
+                <p class="surface-kicker">Grouped history</p>
+                <h2 id="journeyChaptersTitle">Your debt chapters</h2>
+                <p>Each payment or full square-up closes a chapter. Open one to see what changed your balance.</p>
+              </div>
             </div>
-            <div class="relationship-list pairwise-list" id="pairwiseList"></div>
+            <div id="journeyTimeline"></div>
+          </section>
+
+          <section class="surface journey-people-surface" aria-labelledby="allRelationshipsTitle">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="surface-kicker">Stories by person</p>
+                <h2 id="allRelationshipsTitle">Your journey with each person</h2>
+                <p>Includes settled relationships, so old debts do not disappear from the story.</p>
+              </div>
+            </div>
+            <div class="journey-person-grid" id="pairwiseList"></div>
           </section>
         </section>
       </main>
@@ -259,7 +280,7 @@
       <button class="mobile-nav-item" type="button" data-view-target="activity"><span aria-hidden="true">&#9776;</span><span>Activity</span></button>
       <button class="mobile-compose" type="button" data-open-entry aria-label="Add a ledger entry">+</button>
       <button class="mobile-nav-item" type="button" data-view-target="settle"><span aria-hidden="true">&#8644;</span><span>Settle</span></button>
-      <button class="mobile-nav-item" type="button" data-view-target="network"><span aria-hidden="true">&#8756;</span><span>Network</span></button>
+      <button class="mobile-nav-item" type="button" data-view-target="journey"><span aria-hidden="true">&#8599;</span><span>Journey</span></button>
     </nav>
 
     <div id="entryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle" aria-hidden="true">

@@ -130,7 +130,9 @@ const el = {
   exportLedger: document.getElementById("exportLedger"),
   settleList: document.getElementById("settleList"),
   settleSummary: document.getElementById("settleSummary"),
-  networkGraph: document.getElementById("networkGraph"),
+  journeyChart: document.getElementById("journeyChart"),
+  journeySummary: document.getElementById("journeySummary"),
+  journeyTimeline: document.getElementById("journeyTimeline"),
   peopleModal: document.getElementById("peopleModal"),
   peopleList: document.getElementById("peopleList"),
   personForm: document.getElementById("personForm"),
@@ -160,10 +162,6 @@ let db = null;
 let auth = null;
 let unsubscribeTransactions = null;
 let unsubscribeGroup = null;
-let networkSimulation = null;
-let d3Library = null;
-let d3LoadPromise = null;
-let networkRenderVersion = 0;
 
 function init() {
   wireEvents();
@@ -350,6 +348,10 @@ function wireEvents() {
 
   el.myRelationships.addEventListener("click", handlePairSelection);
   el.pairwiseList.addEventListener("click", handlePairSelection);
+  el.journeyTimeline.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-open-tx]");
+    if (item) showEntryDetail(item.dataset.openTx);
+  });
   el.recentActivity.addEventListener("click", (event) => {
     const item = event.target.closest("[data-tx-id]");
     if (item) showEntryDetail(item.dataset.txId);
@@ -399,13 +401,14 @@ function handlePairSelection(event) {
 
 function initialViewFromHash() {
   const requested = window.location.hash.replace("#", "");
-  return ["overview", "activity", "settle", "network"].includes(requested)
+  if (requested === "network") return "journey";
+  return ["overview", "activity", "settle", "journey"].includes(requested)
     ? requested
     : "overview";
 }
 
 function switchView(viewName, { focus = true, updateHash = true } = {}) {
-  const nextView = ["overview", "activity", "settle", "network"].includes(viewName)
+  const nextView = ["overview", "activity", "settle", "journey"].includes(viewName)
     ? viewName
     : "overview";
   state.activeView = nextView;
@@ -434,12 +437,7 @@ function switchView(viewName, { focus = true, updateHash = true } = {}) {
     history.replaceState(null, "", `#${nextView}`);
   }
 
-  if (nextView === "network") {
-    requestAnimationFrame(renderNetworkFromState);
-  } else if (networkSimulation) {
-    networkSimulation.stop();
-    networkSimulation = null;
-  }
+  if (nextView === "journey") requestAnimationFrame(renderJourneyFromState);
 
   if (focus) {
     const heading = document.querySelector(
@@ -734,7 +732,7 @@ function renderAll() {
   renderLedger();
   renderSettleUp();
   updateActiveMember();
-  if (state.activeView === "network") renderNetworkFromState();
+  if (state.activeView === "journey") renderJourneyFromState();
 }
 
 function updateActiveMember() {
@@ -1343,7 +1341,6 @@ function renderDashboard() {
     ? recent.map((entry) => renderActivityItem(entry, { compact: true })).join("")
     : `<div class="empty-state"><strong>No activity for you yet</strong><span>Add an entry and its reason will appear here.</span></div>`;
   el.netBalances.innerHTML = renderNetBalances(balances);
-  el.pairwiseList.innerHTML = renderPairwise(netEdges);
 }
 
 function countPeopleText(count, singular, plural) {
@@ -1437,249 +1434,127 @@ function renderNetBalances(balances) {
     .join("");
 }
 
-function renderPairwise(netEdges) {
-  if (netEdges.size === 0) {
-    return `<div class="empty-state"><strong>No open relationships</strong><span>The group is completely settled.</span></div>`;
-  }
-
-  const items = [];
-  netEdges.forEach((amount, key) => {
-    const [debtorId, creditorId] = key.split("|");
-    items.push({
-      debtor: debtorId,
-      creditor: creditorId,
-      amount,
+function buildRelationshipJourneys(memberId) {
+  if (!memberId) return [];
+  return state.members
+    .filter((member) => member.id !== memberId)
+    .map((member) => {
+      const contribution = buildContributions((transaction) =>
+        pairDelta(transaction, memberId, member.id)
+      );
+      if (!contribution.rows.length) return null;
+      return {
+        member,
+        rows: contribution.rows,
+        total: contribution.total,
+        chapters: ledgerCore.buildJourneyChapters(contribution.rows),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const openDifference = Number(b.total !== 0) - Number(a.total !== 0);
+      return openDifference || Math.abs(b.total) - Math.abs(a.total);
     });
-  });
+}
 
-  return items
-    .sort((a, b) => b.amount - a.amount)
-    .map((item) => {
-      const debtor = memberName(item.debtor);
-      const creditor = memberName(item.creditor);
+function renderRelationshipJourneys(journeys, memberId) {
+  if (!memberId) {
+    return `<div class="empty-state"><strong>Choose your identity</strong><span>Your relationship stories will appear here.</span></div>`;
+  }
+  if (!journeys.length) {
+    return `<div class="empty-state"><strong>No journey yet</strong><span>Add an expense or loan involving you to begin the story.</span></div>`;
+  }
+  return journeys
+    .map((journey) => {
+      const other = journey.member.displayName;
+      const current = journey.total > 0
+        ? `You owe ${other} ${formatVnd(journey.total)}`
+        : journey.total < 0
+          ? `${other} owes you ${formatVnd(Math.abs(journey.total))}`
+          : `Settled with ${other}`;
+      const last = journey.rows[journey.rows.length - 1];
       return `
-        <button class="relationship-row owes" type="button" data-pair="${escapeHtml(
-          item.debtor
-        )}|${escapeHtml(item.creditor)}">
-          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(debtor))}</span>
-          <span class="relationship-copy">
-            <strong>${escapeHtml(debtor)} <span aria-hidden="true">&rarr;</span> ${escapeHtml(creditor)}</strong>
-            <span>${escapeHtml(debtor)} owes ${escapeHtml(creditor)}</span>
+        <button class="journey-person-card" type="button" data-pair="${escapeHtml(memberId)}|${escapeHtml(journey.member.id)}">
+          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(other))}</span>
+          <span class="journey-person-copy">
+            <strong>${escapeHtml(other)}</strong>
+            <span>${journey.chapters.length} ${journey.chapters.length === 1 ? "chapter" : "chapters"} &middot; ${journey.rows.length} entries</span>
+            <span class="chapter-rail" aria-hidden="true">${journey.chapters
+              .map((chapter) => `<i class="${chapter.boundary}"></i>`)
+              .join("")}</span>
+            <small>Latest: ${escapeHtml(last.reason || "No reason given")}</small>
           </span>
-          <span class="relationship-amount"><strong>${formatVnd(item.amount)}</strong><span>Open explanation</span></span>
-        </button>
-      `;
+          <span class="journey-person-balance ${journey.total > 0 ? "owe" : journey.total < 0 ? "receive" : "even"}">${escapeHtml(current)}</span>
+        </button>`;
     })
     .join("");
 }
 
-async function renderNetworkFromState() {
-  if (!el.networkGraph) return;
-  const renderVersion = ++networkRenderVersion;
-  if (networkSimulation) networkSimulation.stop();
+function renderJourneyFromState() {
+  if (!el.journeyChart) return;
+  const memberId = state.currentMemberId;
+  if (!memberId) {
+    el.journeySummary.textContent = "Choose your identity to see a personal journey.";
+    el.journeyChart.innerHTML = `<div class="empty-state"><strong>Choose your identity</strong><span>The chart follows the balance of the person using the ledger.</span></div>`;
+    el.journeyTimeline.innerHTML = "";
+    el.pairwiseList.innerHTML = renderRelationshipJourneys([], null);
+    return;
+  }
 
-  const { netEdges } = ledgerCore.buildLedgerSummary(
-    state.transactions,
-    state.members
+  const { rows, total } = buildContributions((transaction) =>
+    balanceDelta(transaction, memberId)
   );
-  const links = [...netEdges.entries()].map(([key, amount]) => {
-    const [debtorId, creditorId] = key.split("|");
-    return {
-      source: debtorId,
-      target: creditorId,
-      debtorId,
-      creditorId,
-      amount,
-    };
+  const chapters = ledgerCore.buildJourneyChapters(rows);
+  const payments = rows.filter((row) => row.type === "SETTLEMENT").length;
+  el.journeySummary.textContent = `${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}, ${payments} payment ${payments === 1 ? "checkpoint" : "checkpoints"}. ${memberStateText(memberId, total)} now.`;
+  el.journeyChart.innerHTML = renderBalanceJourneyChart(rows, memberId);
+  el.journeyTimeline.innerHTML = renderJourneyChapters(
+    chapters,
+    false,
+    (running) => memberStateText(memberId, running)
+  );
+  el.pairwiseList.innerHTML = renderRelationshipJourneys(
+    buildRelationshipJourneys(memberId),
+    memberId
+  );
+}
+
+function renderBalanceJourneyChart(rows, memberId) {
+  if (!rows.length) {
+    return `<div class="empty-state"><strong>No balance changes yet</strong><span>Your first expense or loan will start the chart.</span></div>`;
+  }
+  const width = 920;
+  const height = 310;
+  const pad = { top: 34, right: 28, bottom: 36, left: 72 };
+  const values = [0, ...rows.map((row) => row.running)];
+  let minimum = Math.min(0, ...values);
+  let maximum = Math.max(0, ...values);
+  const spread = Math.max(1, maximum - minimum);
+  minimum -= spread * 0.12;
+  maximum += spread * 0.12;
+  const x = (index) => pad.left + (index / Math.max(1, rows.length)) * (width - pad.left - pad.right);
+  const y = (value) => pad.top + ((maximum - value) / (maximum - minimum)) * (height - pad.top - pad.bottom);
+  let path = `M ${x(0)} ${y(0)}`;
+  rows.forEach((row, index) => {
+    path += ` H ${x(index + 1)} V ${y(row.running)}`;
   });
-  const nodes = state.members.map((member) => ({
-    id: member.id,
-    name: member.displayName,
-    current: member.id === state.currentMemberId,
-  }));
-
-  el.networkGraph.innerHTML = "";
-  if (!links.length) {
-    el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>No open debt to map</strong><span>Everyone in the ledger is currently square.</span></div>`;
-    return;
-  }
-
-  el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>Drawing the money map...</strong><span>The exact relationships are already available in the list below.</span></div>`;
-  let d3;
-  try {
-    d3 = await loadD3();
-  } catch (error) {
-    console.error("Could not load the optional network renderer", error);
-    el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>The visual map is unavailable</strong><span>Use the complete relationship list below; it contains the same amounts and explanations.</span></div>`;
-    return;
-  }
-  if (renderVersion !== networkRenderVersion || state.activeView !== "network") return;
-
-  const width = 900;
-  const height = 500;
-  el.networkGraph.innerHTML = "";
-  const svg = d3
-    .select(el.networkGraph)
-    .append("svg")
-    .attr("viewBox", `0 0 ${width} ${height}`)
-    .attr("aria-label", "Current debt relationships. The same values are available in the list below.");
-
-  const defs = svg.append("defs");
-  defs
-    .append("marker")
-    .attr("id", "debt-arrow")
-    .attr("viewBox", "0 -5 10 10")
-    .attr("refX", 8)
-    .attr("refY", 0)
-    .attr("markerWidth", 7)
-    .attr("markerHeight", 7)
-    .attr("orient", "auto")
-    .append("path")
-    .attr("d", "M0,-5L10,0L0,5")
-    .attr("fill", "#958979");
-
-  const linkGroup = svg
-    .append("g")
-    .selectAll("g")
-    .data(links)
-    .join("g")
-    .attr("role", "button")
-    .attr("tabindex", 0)
-    .attr(
-      "aria-label",
-      (link) =>
-        `${memberName(link.debtorId)} owes ${memberName(link.creditorId)} ${formatVnd(link.amount)}. Open explanation.`
-    )
-    .on("click", (_event, link) =>
-      openPairwiseBreakdown(link.debtorId, link.creditorId)
-    )
-    .on("keydown", (event, link) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openPairwiseBreakdown(link.debtorId, link.creditorId);
-      }
-    });
-
-  const visibleLinks = linkGroup
-    .append("line")
-    .attr("class", "network-link")
-    .attr("stroke-width", (link) => Math.max(2, Math.min(8, 2 + Math.log10(link.amount + 1))))
-    .attr("marker-end", "url(#debt-arrow)");
-  linkGroup.append("line").attr("class", "network-link-hit");
-  const linkLabels = linkGroup
-    .append("text")
-    .attr("class", "network-link-label")
-    .text((link) => compactVnd(link.amount));
-
-  const node = svg
-    .append("g")
-    .selectAll("g")
-    .data(nodes)
-    .join("g")
-    .attr("class", (person) => `network-node${person.current ? " current" : ""}`)
-    .attr("role", "button")
-    .attr("tabindex", 0)
-    .attr("aria-label", (person) => `Open ${person.current ? "your" : `${person.name}'s`} balance explanation`)
-    .on("click", (_event, person) => openBalanceBreakdown(person.id))
-    .on("keydown", (event, person) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openBalanceBreakdown(person.id);
-      }
-    });
-
-  node.append("circle").attr("r", 34);
-  node
-    .append("text")
-    .attr("dy", "0.35em")
-    .text((person) => memberInitials(person.name));
-  node
-    .append("text")
-    .attr("class", "network-name")
-    .attr("y", 55)
-    .text((person) => person.current ? `${person.name} (you)` : person.name);
-
-  const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
-  const endpoints = (link) => {
-    const dx = link.target.x - link.source.x;
-    const dy = link.target.y - link.source.y;
-    const distance = Math.max(1, Math.hypot(dx, dy));
-    return {
-      x1: link.source.x + (dx / distance) * 38,
-      y1: link.source.y + (dy / distance) * 38,
-      x2: link.target.x - (dx / distance) * 45,
-      y2: link.target.y - (dy / distance) * 45,
-    };
-  };
-
-  networkSimulation = d3
-    .forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id((person) => person.id).distance(175).strength(0.85))
-    .force("charge", d3.forceManyBody().strength(-540))
-    .force("center", d3.forceCenter(width / 2, height / 2))
-    .force("collision", d3.forceCollide(72))
-    .on("tick", () => {
-      nodes.forEach((person) => {
-        person.x = clamp(person.x, 65, width - 65);
-        person.y = clamp(person.y, 65, height - 75);
-      });
-      visibleLinks
-        .attr("x1", (link) => endpoints(link).x1)
-        .attr("y1", (link) => endpoints(link).y1)
-        .attr("x2", (link) => endpoints(link).x2)
-        .attr("y2", (link) => endpoints(link).y2);
-      linkGroup
-        .select(".network-link-hit")
-        .attr("x1", (link) => endpoints(link).x1)
-        .attr("y1", (link) => endpoints(link).y1)
-        .attr("x2", (link) => endpoints(link).x2)
-        .attr("y2", (link) => endpoints(link).y2);
-      linkLabels
-        .attr("x", (link) => (link.source.x + link.target.x) / 2)
-        .attr("y", (link) => (link.source.y + link.target.y) / 2 - 8);
-      node.attr("transform", (person) => `translate(${person.x},${person.y})`);
-    });
-
-  node.call(
-    d3
-      .drag()
-      .on("start", (event, person) => {
-        if (!event.active) networkSimulation.alphaTarget(0.3).restart();
-        person.fx = person.x;
-        person.fy = person.y;
-      })
-      .on("drag", (event, person) => {
-        person.fx = event.x;
-        person.fy = event.y;
-      })
-      .on("end", (event, person) => {
-        if (!event.active) networkSimulation.alphaTarget(0);
-        person.fx = null;
-        person.fy = null;
-      })
-  );
-}
-
-function loadD3() {
-  if (d3Library) return Promise.resolve(d3Library);
-  if (!d3LoadPromise) {
-    d3LoadPromise = import("https://cdn.jsdelivr.net/npm/d3@7/+esm").then(
-      (module) => {
-        d3Library = module;
-        return module;
-      }
-    );
-  }
-  return d3LoadPromise;
-}
-
-function compactVnd(amount) {
-  const value = Number(amount) || 0;
-  if (value >= 1_000_000) {
-    return `${new Intl.NumberFormat("en", { maximumFractionDigits: 1 }).format(value / 1_000_000)}m`;
-  }
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
+  const zeroY = y(0);
+  const points = rows.map((row, index) => {
+    const checkpoint = row.running === 0 ? "square" : row.type === "SETTLEMENT" ? "payment" : "entry";
+    return `<circle class="journey-point ${checkpoint}" cx="${x(index + 1)}" cy="${y(row.running)}" r="${checkpoint === "entry" ? 5 : 7}"><title>${escapeHtml(`${row.reason || "No reason given"} — ${formatSignedVnd(row.delta)} — ${memberStateText(memberId, row.running)}`)}</title></circle>`;
+  }).join("");
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Your balance after each ledger entry, from oldest to newest">
+      <rect class="journey-zone receive" x="${pad.left}" y="${pad.top}" width="${width - pad.left - pad.right}" height="${Math.max(0, zeroY - pad.top)}"></rect>
+      <rect class="journey-zone owe" x="${pad.left}" y="${zeroY}" width="${width - pad.left - pad.right}" height="${Math.max(0, height - pad.bottom - zeroY)}"></rect>
+      <line class="journey-zero-line" x1="${pad.left}" x2="${width - pad.right}" y1="${zeroY}" y2="${zeroY}"></line>
+      <text class="journey-axis-label receive" x="12" y="${pad.top + 15}">RECEIVE</text>
+      <text class="journey-axis-label owe" x="12" y="${height - pad.bottom - 5}">OWE</text>
+      <path class="journey-path" d="${path}"></path>
+      ${points}
+      <text class="journey-date-label" x="${pad.left}" y="${height - 8}">${escapeHtml(formatJourneyDate(rows[0].date))}</text>
+      <text class="journey-date-label end" x="${width - pad.right}" y="${height - 8}">${escapeHtml(formatJourneyDate(rows[rows.length - 1].date))}</text>
+    </svg>`;
 }
 
 // Positive amount = debtorId owes creditorId more because of this transaction.
@@ -1735,6 +1610,55 @@ function renderBreakdownSteps(rows, positiveIsBad, runningLabel = null) {
     .join("");
 }
 
+function formatJourneyDate(date) {
+  if (!date) return "Unknown date";
+  return new Intl.DateTimeFormat("en", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: APP_CONFIG.timezone,
+  }).format(date);
+}
+
+function renderJourneyChapters(chapters, positiveIsBad, runningLabel) {
+  if (!chapters.length) {
+    return `<div class="empty-state"><strong>No balance story yet</strong><span>Entries that affect this balance will appear here.</span></div>`;
+  }
+  return `<div class="journey-chapters">${chapters
+    .map((chapter, index) => {
+      const isLatest = index === chapters.length - 1;
+      const status = chapter.boundary === "square"
+        ? "Squared up"
+        : chapter.boundary === "settlement"
+          ? "Payment checkpoint"
+          : "Current open chapter";
+      const period = chapter.startDate?.getTime() === chapter.endDate?.getTime()
+        ? formatJourneyDate(chapter.startDate)
+        : `${formatJourneyDate(chapter.startDate)} – ${formatJourneyDate(chapter.endDate)}`;
+      return `
+        <details class="journey-chapter ${chapter.boundary}" ${isLatest ? "open" : ""}>
+          <summary>
+            <span class="chapter-number">${index + 1}</span>
+            <span class="chapter-heading">
+              <strong>Chapter ${index + 1}: ${status}</strong>
+              <span>${escapeHtml(period)} &middot; ${chapter.rows.length} ${chapter.rows.length === 1 ? "entry" : "entries"}</span>
+            </span>
+            <span class="chapter-ending">${escapeHtml(runningLabel(chapter.after))}<small>after chapter</small></span>
+            <span class="chapter-chevron" aria-hidden="true">&#8964;</span>
+          </summary>
+          <div class="journey-chapter-body">
+            <p>${chapter.boundary === "square"
+              ? "This chapter finished with the balance fully cleared."
+              : chapter.boundary === "settlement"
+                ? "A recorded payment closes this checkpoint; the next change begins a new chapter."
+                : "This is the active chapter that explains the balance you have now."}</p>
+            <div class="breakdown-list">${renderBreakdownSteps(chapter.rows, positiveIsBad, runningLabel)}</div>
+          </div>
+        </details>`;
+    })
+    .join("")}</div>`;
+}
+
 function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
   state.breakdownContext = {
     type: "pair",
@@ -1745,6 +1669,7 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
   const { rows, total } = buildContributions((tx) =>
     pairDelta(tx, debtorId, creditorId)
   );
+  const chapters = ledgerCore.buildJourneyChapters(rows);
 
   const debtor = memberName(debtorId);
   const creditor = memberName(creditorId);
@@ -1770,7 +1695,7 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
       <p class="label">Result</p>
       <p class="breakdown-total">${escapeHtml(headline)}</p>
       <p class="muted">
-        ${rows.length} ${rows.length === 1 ? "entry" : "entries"} between them, oldest first.
+        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} contain ${rows.length} ${rows.length === 1 ? "entry" : "entries"} between them.
         Amounts marked <span class="delta up">+</span> grow what ${escapeHtml(
           debtor
         )} owes, <span class="delta down">&minus;</span> shrinks it.
@@ -1778,11 +1703,11 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
     </div>
     ${
       rows.length
-        ? `<div class="breakdown-list">${renderBreakdownSteps(
-            rows,
+        ? renderJourneyChapters(
+            chapters,
             true,
             (running) => pairStateText(debtorId, creditorId, running)
-          )}</div>`
+          )
         : "<p class='muted'>No shared transactions between these two yet.</p>"
     }
     <p class="muted">Click any entry above to open its full detail.</p>
@@ -1794,6 +1719,7 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
 function openBalanceBreakdown(memberId) {
   state.breakdownContext = { type: "member", memberId };
   const { rows, total } = buildContributions((tx) => balanceDelta(tx, memberId));
+  const chapters = ledgerCore.buildJourneyChapters(rows);
   const label = memberName(memberId);
 
   let headline;
@@ -1805,19 +1731,7 @@ function openBalanceBreakdown(memberId) {
     headline = `${label} is all square`;
   }
 
-  const { netEdges } = ledgerCore.buildLedgerSummary(
-    state.transactions,
-    state.members
-  );
-  const counterparties = state.members
-    .filter((member) => member.id !== memberId)
-    .map((member) => {
-      const owedToMember = netEdges.get(`${member.id}|${memberId}`) || 0;
-      const owedByMember = netEdges.get(`${memberId}|${member.id}`) || 0;
-      return { id: member.id, net: owedToMember - owedByMember };
-    })
-    .filter((entry) => entry.net !== 0)
-    .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+  const counterparties = buildRelationshipJourneys(memberId);
 
   el.breakdownTitle.textContent = `${label}'s net balance`;
   el.breakdownBody.innerHTML = `
@@ -1825,7 +1739,7 @@ function openBalanceBreakdown(memberId) {
       <p class="label">Result</p>
       <p class="breakdown-total">${escapeHtml(headline)}</p>
       <p class="muted">
-        ${rows.length} ${rows.length === 1 ? "entry" : "entries"} affect ${escapeHtml(
+        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} group ${rows.length} ${rows.length === 1 ? "entry" : "entries"} that affect ${escapeHtml(
     label
   )}, oldest first.
         <span class="delta down">+</span> means money owed to ${escapeHtml(
@@ -1842,17 +1756,14 @@ function openBalanceBreakdown(memberId) {
           counterparties.length
             ? counterparties
                 .map((entry) => {
-                  const other = escapeHtml(memberName(entry.id));
-                  const pair =
-                    entry.net >= 0
-                      ? `${entry.id}|${memberId}`
-                      : `${memberId}|${entry.id}`;
+                  const other = escapeHtml(entry.member.displayName);
+                  const pair = `${memberId}|${entry.member.id}`;
                   const text =
-                    entry.net > 0
-                      ? `${other} owes ${escapeHtml(label)} ${formatVnd(entry.net)}`
-                      : entry.net < 0
+                    entry.total < 0
+                      ? `${other} owes ${escapeHtml(label)} ${formatVnd(Math.abs(entry.total))}`
+                      : entry.total > 0
                         ? `${escapeHtml(label)} owes ${other} ${formatVnd(
-                            Math.abs(entry.net)
+                            entry.total
                           )}`
                         : `Settled up with ${other}`;
                   return `
@@ -1862,12 +1773,12 @@ function openBalanceBreakdown(memberId) {
                       <div class="flex items-center justify-between">
                         <strong>${text}</strong>
                         <span class="chip ${
-                          entry.net > 0 ? "" : entry.net < 0 ? "loan" : "settlement"
+                          entry.total < 0 ? "" : entry.total > 0 ? "loan" : "settlement"
                         }">${
-                    entry.net > 0 ? "receive" : entry.net < 0 ? "pay" : "even"
+                    entry.total < 0 ? "receive" : entry.total > 0 ? "pay" : "even"
                   }</span>
                       </div>
-                      <div class="item-hint">Open this relationship's entries</div>
+                      <div class="item-hint">${entry.chapters.length} ${entry.chapters.length === 1 ? "chapter" : "chapters"}; open the story</div>
                     </button>
                   `;
                 })
@@ -1877,14 +1788,14 @@ function openBalanceBreakdown(memberId) {
       </div>
     </div>
     <div>
-      <p class="label">Every entry, in order</p>
+      <p class="label">Balance journey</p>
       ${
         rows.length
-          ? `<div class="breakdown-list">${renderBreakdownSteps(
-              rows,
+          ? renderJourneyChapters(
+              chapters,
               false,
               (running) => memberStateText(memberId, running)
-            )}</div>`
+            )
           : "<p class='muted'>No transactions involve this member yet.</p>"
       }
     </div>
