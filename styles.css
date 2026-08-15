@@ -1354,6 +1354,135 @@ button.balance-card:hover {
 
 .chapter-rail i.square { background: var(--positive); }
 .chapter-rail i.settlement { background: var(--gold); }
+
+.debt-network-surface {
+  margin-top: 18px;
+}
+
+.debt-network-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.debt-network-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.network-key {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--positive);
+}
+
+.network-key.current { background: var(--accent); }
+
+.network-key.arrow {
+  width: 28px;
+  height: 2px;
+  border-radius: 0;
+  background: var(--line-strong);
+}
+
+.debt-network-map {
+  min-height: 380px;
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at center, rgba(23, 107, 101, 0.06), transparent 42%),
+    linear-gradient(rgba(221, 211, 196, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(221, 211, 196, 0.24) 1px, transparent 1px),
+    #fbf8f2;
+  background-size: auto, 32px 32px, 32px 32px, auto;
+}
+
+.debt-network-map svg {
+  display: block;
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+
+.network-edge-line {
+  stroke: #887c6d;
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+#network-arrow path { fill: #887c6d; }
+
+.network-edge-hit {
+  stroke: transparent;
+  stroke-width: 24;
+  cursor: pointer;
+}
+
+.network-edge-amount {
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: #fbf8f2;
+  stroke-linejoin: round;
+  stroke-width: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.debt-network-edge { cursor: pointer; }
+
+.debt-network-edge:hover .network-edge-line,
+.debt-network-edge:focus .network-edge-line {
+  stroke: var(--focus);
+  stroke-width: 6;
+}
+
+.debt-network-edge:focus { outline: none; }
+
+.debt-network-node circle {
+  fill: var(--positive);
+  stroke: var(--surface);
+  stroke-width: 6;
+  filter: drop-shadow(0 7px 10px rgba(55, 45, 34, 0.16));
+}
+
+.debt-network-node.current circle { fill: var(--accent); }
+
+.network-node-initials,
+.network-node-name {
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.network-node-initials { fill: white; }
+
+.network-node-name {
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: #fbf8f2;
+  stroke-width: 5px;
+}
+
+.network-instruction {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.network-empty {
+  display: grid;
+  min-height: 380px;
+  place-content: center;
+}
 }
 
 .footer {

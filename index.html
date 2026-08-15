@@ -258,6 +258,23 @@
             </div>
             <div class="journey-person-grid" id="pairwiseList"></div>
           </section>
+
+          <section class="surface debt-network-surface" aria-labelledby="debtNetworkTitle">
+            <div class="surface-header compact-header">
+              <div>
+                <p class="surface-kicker">Payment verification</p>
+                <h2 id="debtNetworkTitle">Current debt network</h2>
+                <p>Each arrow starts at the person who must pay and points to the person who should receive.</p>
+              </div>
+            </div>
+            <div class="debt-network-legend" aria-label="Debt network legend">
+              <span><i class="network-key current"></i> You</span>
+              <span><i class="network-key person"></i> Other person</span>
+              <span><i class="network-key arrow"></i> Pays this person</span>
+            </div>
+            <div class="debt-network-map" id="networkMap"></div>
+            <p class="network-instruction">Select an arrow to verify the entries behind that payment.</p>
+          </section>
         </section>
       </main>
 

@@ -132,6 +132,7 @@ const el = {
   settleSummary: document.getElementById("settleSummary"),
   journeyChart: document.getElementById("journeyChart"),
   journeySummary: document.getElementById("journeySummary"),
+  networkMap: document.getElementById("networkMap"),
   peopleModal: document.getElementById("peopleModal"),
   peopleList: document.getElementById("peopleList"),
   personForm: document.getElementById("personForm"),
@@ -347,6 +348,8 @@ function wireEvents() {
 
   el.myRelationships.addEventListener("click", handlePairSelection);
   el.pairwiseList.addEventListener("click", handlePairSelection);
+  el.networkMap.addEventListener("click", handleNetworkSelection);
+  el.networkMap.addEventListener("keydown", handleNetworkSelection);
   el.journeyChart.addEventListener("click", handleJourneyChartActivation);
   el.journeyChart.addEventListener("keydown", handleJourneyChartActivation);
   el.journeyChart.addEventListener("pointerover", showJourneyTooltip);
@@ -397,6 +400,15 @@ function wireEvents() {
 function handlePairSelection(event) {
   const item = event.target.closest("[data-pair]");
   if (!item) return;
+  const [debtorId, creditorId] = item.dataset.pair.split("|");
+  openPairwiseBreakdown(debtorId, creditorId);
+}
+
+function handleNetworkSelection(event) {
+  const item = event.target.closest?.("[data-pair]");
+  if (!item) return;
+  if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
   const [debtorId, creditorId] = item.dataset.pair.split("|");
   openPairwiseBreakdown(debtorId, creditorId);
 }
@@ -1546,6 +1558,7 @@ function renderRelationshipJourneys(journeys, memberId) {
 
 function renderJourneyFromState() {
   if (!el.journeyChart) return;
+  el.networkMap.innerHTML = renderDebtNetwork();
   const memberId = state.currentMemberId;
   if (!memberId) {
     el.journeySummary.textContent = "Choose your identity to see a personal journey.";
@@ -1608,6 +1621,92 @@ function renderBalanceJourneyChart(rows, memberId) {
       <text class="journey-date-label end" x="${width - pad.right}" y="${height - 8}">${escapeHtml(formatJourneyDate(rows[rows.length - 1].date))}</text>
     </svg>
     <div class="journey-tooltip" hidden><strong></strong><span></span><small>Click for full entry details</small></div>`;
+}
+
+function renderDebtNetwork() {
+  const { netEdges } = ledgerCore.buildLedgerSummary(
+    state.transactions,
+    state.members
+  );
+  if (!netEdges.size) {
+    return `<div class="empty-state network-empty"><strong>No payments needed</strong><span>Every current pairwise debt is square.</span></div>`;
+  }
+
+  const edges = [...netEdges.entries()].map(([key, amount]) => {
+    const [debtorId, creditorId] = key.split("|");
+    return { debtorId, creditorId, amount };
+  });
+  const involvedIds = new Set(
+    edges.flatMap(({ debtorId, creditorId }) => [debtorId, creditorId])
+  );
+  const people = state.members.filter(({ id }) => involvedIds.has(id));
+  const width = 900;
+  const height = 470;
+  const centerX = width / 2;
+  const centerY = 220;
+  const positions = new Map();
+
+  people.forEach((person, index) => {
+    if (people.length === 2) {
+      positions.set(person.id, {
+        x: index === 0 ? 225 : 675,
+        y: centerY,
+      });
+      return;
+    }
+    const angle = -Math.PI / 2 + (index / people.length) * Math.PI * 2;
+    positions.set(person.id, {
+      x: centerX + Math.cos(angle) * 315,
+      y: centerY + Math.sin(angle) * 155,
+    });
+  });
+
+  const edgeMarkup = edges.map((edge) => {
+    const source = positions.get(edge.debtorId);
+    const target = positions.get(edge.creditorId);
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const unitX = dx / distance;
+    const unitY = dy / distance;
+    const startX = source.x + unitX * 50;
+    const startY = source.y + unitY * 50;
+    const endX = target.x - unitX * 58;
+    const endY = target.y - unitY * 58;
+    const labelX = (startX + endX) / 2 - unitY * 13;
+    const labelY = (startY + endY) / 2 + unitX * 13;
+    const debtor = memberName(edge.debtorId);
+    const creditor = memberName(edge.creditorId);
+    const accessible = `${debtor} pays ${creditor} ${formatVnd(edge.amount)}. Open explanation.`;
+    return `
+      <g class="debt-network-edge" role="button" tabindex="0" data-pair="${escapeHtml(edge.debtorId)}|${escapeHtml(edge.creditorId)}" aria-label="${escapeHtml(accessible)}">
+        <line class="network-edge-line" x1="${startX}" y1="${startY}" x2="${endX}" y2="${endY}" marker-end="url(#network-arrow)"></line>
+        <line class="network-edge-hit" x1="${startX}" y1="${startY}" x2="${endX}" y2="${endY}"></line>
+        <text class="network-edge-amount" x="${labelX}" y="${labelY}">${escapeHtml(formatVnd(edge.amount))}</text>
+      </g>`;
+  }).join("");
+
+  const nodeMarkup = people.map((person) => {
+    const position = positions.get(person.id);
+    const current = person.id === state.currentMemberId;
+    return `
+      <g class="debt-network-node${current ? " current" : ""}" transform="translate(${position.x} ${position.y})">
+        <circle r="40"></circle>
+        <text class="network-node-initials" y="5">${escapeHtml(memberInitials(person.displayName))}</text>
+        <text class="network-node-name" y="64">${escapeHtml(person.displayName)}${current ? " (you)" : ""}</text>
+      </g>`;
+  }).join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" role="group" aria-label="Current payment network. Arrows point from each payer to the person who should receive.">
+      <defs>
+        <marker id="network-arrow" viewBox="0 -5 10 10" refX="8" refY="0" markerWidth="8" markerHeight="8" orient="auto">
+          <path d="M0,-5L10,0L0,5"></path>
+        </marker>
+      </defs>
+      ${edgeMarkup}
+      ${nodeMarkup}
+    </svg>`;
 }
 
 // Positive amount = debtorId owes creditorId more because of this transaction.
