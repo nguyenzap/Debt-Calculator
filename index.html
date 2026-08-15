@@ -3,294 +3,426 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Debt Crew Ledger</title>
+    <meta name="description" content="A clear shared debt ledger for the Solo Knight crew." />
+    <meta name="theme-color" content="#f7f3ea" />
+    <title>Solo Knight Ledger</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              ink: "#1a1812",
-              sand: "#f6f1e7",
-              clay: "#e7dfcf",
-              accent: "#e4572e",
-              teal: "#0f7c7b",
-              night: "#2d2a20",
-            },
-            fontFamily: {
-              display: ["Fraunces", "Georgia", "serif"],
-              sans: ["Space Grotesk", "Trebuchet MS", "sans-serif"],
-            },
-          },
-        },
-      };
-    </script>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body class="min-h-screen bg-sand text-ink">
-    <div class="ambient"></div>
+  <body>
+    <a class="skip-link" href="#mainContent">Skip to ledger</a>
+    <div class="ambient" aria-hidden="true"></div>
 
     <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Shared ledger</p>
-          <h1 class="title">Debt Crew</h1>
-          <p class="subtitle">Track who paid, who owes, and settle up fast.</p>
-        </div>
-        <div class="identity">
-          <div class="identity-card">
-            <p class="label">Operating as</p>
-            <p class="value" id="activeMemberName">Not set</p>
-            <p class="hint" id="authStatus">Connecting...</p>
-          </div>
-          <div class="identity-actions">
-            <button class="btn btn-primary" id="openIdentity">Switch Identity</button>
-            <button class="btn btn-ghost" id="refreshData">Refresh</button>
-          </div>
+      <header class="app-header">
+        <button class="brand" type="button" data-view-target="overview" aria-label="Open overview">
+          <span class="brand-mark" aria-hidden="true">SK</span>
+          <span>
+            <span class="brand-name">Solo Knight</span>
+            <span class="brand-subtitle">Shared ledger</span>
+          </span>
+        </button>
+
+        <nav class="primary-nav" aria-label="Main navigation">
+          <button class="nav-item active" type="button" data-view-target="overview" aria-current="page">Overview</button>
+          <button class="nav-item" type="button" data-view-target="activity">Activity</button>
+          <button class="nav-item" type="button" data-view-target="settle">Settle up</button>
+          <button class="nav-item" type="button" data-view-target="network">Network</button>
+        </nav>
+
+        <div class="header-actions">
+          <button class="icon-action" type="button" id="refreshData" title="Refresh ledger">
+            <span aria-hidden="true">&#8635;</span><span class="sr-only">Refresh ledger</span>
+          </button>
+          <button class="icon-action" type="button" id="openPeople" title="Add a lender or receiver">
+            <span aria-hidden="true">+</span><span class="sr-only">Add a lender or receiver</span>
+          </button>
+          <button class="member-switch" type="button" id="openIdentity" aria-label="Switch identity">
+            <span class="avatar avatar-current" id="activeMemberAvatar" aria-hidden="true">?</span>
+            <span class="member-switch-copy">
+              <span class="member-switch-name" id="activeMemberName">Choose identity</span>
+              <span class="member-switch-status" id="authStatus" role="status" aria-live="polite">Connecting...</span>
+            </span>
+            <span aria-hidden="true">&#8964;</span>
+          </button>
+          <button class="btn btn-primary header-add" type="button" id="jumpAddEntry">
+            <span aria-hidden="true">+</span> Add entry
+          </button>
         </div>
       </header>
 
-      <main class="main-grid grid-cols-1 lg:grid-cols-12">
-        <section class="panel lg:col-span-7" id="dashboardPanel">
-          <div class="panel-header">
-            <h2 class="panel-title">Dashboard</h2>
-            <div class="panel-actions">
-              <button class="btn btn-primary" id="jumpAddEntry">Add Entry</button>
-              <button class="btn btn-ghost" id="jumpSettle">Settle Up</button>
+      <main id="mainContent" tabindex="-1">
+        <section class="app-view active" id="dashboardPanel" data-view-panel="overview" aria-labelledby="overviewTitle">
+          <div class="view-heading overview-heading">
+            <div>
+              <p class="eyebrow">Your position today</p>
+              <h1 id="overviewTitle">Know exactly where the money went.</h1>
+              <p class="view-intro" id="overviewGreeting">Your personal balance and every entry behind it, in one place.</p>
             </div>
+            <button class="text-action" type="button" id="overviewExplainBalance">
+              Why is this my balance? <span aria-hidden="true">&rarr;</span>
+            </button>
           </div>
-          <div class="panel-body grid lg:grid-cols-2 gap-6">
-            <div>
-              <h3 class="section-title">Net balances</h3>
-              <p class="section-hint">Click a person to see how the total built up.</p>
-              <div id="netBalances" class="stack"></div>
-            </div>
-            <div>
-              <h3 class="section-title">Pairwise debts</h3>
-              <p class="section-hint">Click a debt to see every entry behind it.</p>
-              <div id="pairwiseList" class="stack"></div>
-            </div>
+
+          <div class="summary-grid" aria-label="Personal ledger summary">
+            <button class="balance-card balance-card-main" type="button" id="personalBalanceCard">
+              <span class="summary-label" id="personalBalanceLabel">Your net balance</span>
+              <strong class="summary-amount" id="personalBalanceAmount">--</strong>
+              <span class="summary-foot" id="personalBalanceFoot">Waiting for ledger data</span>
+              <span class="summary-link">Open the full explanation <span aria-hidden="true">&rarr;</span></span>
+            </button>
+            <article class="balance-card balance-card-owe">
+              <span class="summary-icon owe" aria-hidden="true">&#8599;</span>
+              <span class="summary-label">You owe</span>
+              <strong class="summary-amount compact" id="amountYouOwe">0 VND</strong>
+              <span class="summary-foot" id="peopleYouOweCount">No one to pay</span>
+            </article>
+            <article class="balance-card balance-card-owed">
+              <span class="summary-icon owed" aria-hidden="true">&#8601;</span>
+              <span class="summary-label">Owed to you</span>
+              <strong class="summary-amount compact" id="amountOwedToYou">0 VND</strong>
+              <span class="summary-foot" id="peopleOweCount">No one owes you</span>
+            </article>
+            <article class="balance-card balance-card-count">
+              <span class="summary-icon neutral" aria-hidden="true">#</span>
+              <span class="summary-label">Active entries</span>
+              <strong class="summary-amount compact" id="trackedEntryCount">0</strong>
+              <span class="summary-foot">Loans, expenses and settlements</span>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="surface relationship-surface" aria-labelledby="relationshipsTitle">
+              <div class="surface-header">
+                <div>
+                  <p class="surface-kicker">Your balance by person</p>
+                  <h2 id="relationshipsTitle">Who you need to settle with</h2>
+                  <p>Open any person to see every expense, loan and payment behind the amount.</p>
+                </div>
+                <button class="btn btn-soft" type="button" id="jumpSettle">View settlement plan</button>
+              </div>
+              <div class="relationship-list" id="myRelationships"></div>
+            </section>
+
+            <section class="surface recent-surface" aria-labelledby="recentTitle">
+              <div class="surface-header compact-header">
+                <div>
+                  <p class="surface-kicker">Latest changes</p>
+                  <h2 id="recentTitle">Your recent activity</h2>
+                </div>
+                <button class="text-action" type="button" data-view-target="activity">See all</button>
+              </div>
+              <div class="activity-list compact-activity" id="recentActivity"></div>
+            </section>
+
+            <section class="surface group-surface" aria-labelledby="groupBalancesTitle">
+              <div class="surface-header">
+                <div>
+                  <p class="surface-kicker">Everyone at a glance</p>
+                  <h2 id="groupBalancesTitle">Group net balances</h2>
+                  <p>A positive balance means that person should receive money overall.</p>
+                </div>
+                <button class="text-action" type="button" data-view-target="network">
+                  Open money map <span aria-hidden="true">&rarr;</span>
+                </button>
+              </div>
+              <div class="group-balance-grid" id="netBalances"></div>
+            </section>
           </div>
         </section>
 
-        <section class="panel lg:col-span-5" id="entryPanel">
-          <div class="panel-header">
-            <h2 class="panel-title">Add Entry</h2>
-            <p class="panel-note" id="entryModeNote">Create a new transaction.</p>
+        <section class="app-view hidden" id="ledgerPanel" data-view-panel="activity" aria-labelledby="activityTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">Transaction history</p>
+              <h1 id="activityTitle">Find the entry that changed a balance.</h1>
+              <p class="view-intro">Search by reason, person or type, then open an entry for its exact impact.</p>
+            </div>
+            <div class="view-actions">
+              <button class="btn btn-soft" type="button" id="exportLedger">Download ledger</button>
+              <button class="btn btn-primary" type="button" data-open-entry><span aria-hidden="true">+</span> Add entry</button>
+            </div>
           </div>
-          <form id="entryForm" class="panel-body stack">
-            <div class="grid gap-4 sm:grid-cols-2">
-              <label class="field">
+
+          <section class="surface activity-surface">
+            <div class="filter-toolbar" aria-label="Activity filters">
+              <label class="search-field">
+                <span class="sr-only">Search activity</span>
+                <span class="search-icon" aria-hidden="true">&#8981;</span>
+                <input id="ledgerSearch" type="search" class="input" placeholder="Search dinner, taxi, a person..." autocomplete="off" />
+              </label>
+              <label class="field compact-field">
                 <span>Type</span>
-                <select id="entryType" class="input">
-                  <option value="LOAN">Loan</option>
-                  <option value="EXPENSE">Expense</option>
-                  <option value="SETTLEMENT">Settlement</option>
+                <select id="ledgerTypeFilter" class="input">
+                  <option value="ALL">All entries</option>
+                  <option value="LOAN">Loans</option>
+                  <option value="EXPENSE">Expenses</option>
+                  <option value="SETTLEMENT">Settlements</option>
+                </select>
+              </label>
+              <label class="field compact-field">
+                <span>Person</span>
+                <select id="ledgerMemberFilter" class="input"></select>
+              </label>
+              <details class="more-filters">
+                <summary class="btn btn-soft">More filters</summary>
+                <div class="more-filters-popover">
+                  <label class="field"><span>From</span><input id="ledgerFrom" type="date" class="input" /></label>
+                  <label class="field"><span>To</span><input id="ledgerTo" type="date" class="input" /></label>
+                  <label class="toggle"><input type="checkbox" id="showDeleted" /><span>Include deleted entries</span></label>
+                  <button class="btn btn-soft clear-filters" type="button" id="clearLedgerFilters">Clear filters</button>
+                </div>
+              </details>
+            </div>
+            <div class="activity-results-header">
+              <p id="ledgerResultCount" role="status" aria-live="polite">All activity</p>
+              <p class="muted">Newest first</p>
+            </div>
+            <div class="activity-list" id="ledgerList"></div>
+          </section>
+        </section>
+
+        <section class="app-view hidden" id="settlePanel" data-view-panel="settle" aria-labelledby="settleTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">A practical route back to even</p>
+              <h1 id="settleTitle">Settle the group without the guesswork.</h1>
+              <p class="view-intro">These suggested payments preserve everyone&apos;s final balance.</p>
+            </div>
+            <button class="btn btn-primary" type="button" data-open-entry data-entry-type="SETTLEMENT">Record a payment</button>
+          </div>
+
+          <div class="settle-layout">
+            <section class="surface settle-surface" aria-labelledby="settlementPlanTitle">
+              <div class="surface-header">
+                <div>
+                  <p class="surface-kicker">Current plan</p>
+                  <h2 id="settlementPlanTitle">Suggested payments</h2>
+                  <p id="settleSummary" role="status" aria-live="polite">Waiting for ledger data.</p>
+                </div>
+              </div>
+              <div class="settle-list" id="settleList"></div>
+            </section>
+            <aside class="surface settle-explainer" aria-labelledby="settleExplainerTitle">
+              <span class="explainer-mark" aria-hidden="true">i</span>
+              <h2 id="settleExplainerTitle">How this works</h2>
+              <p>
+                The plan combines every active loan, shared expense and recorded payment into one net balance per person.
+                Recording a payment adds a settlement entry; it never removes the original reasons.
+              </p>
+              <button class="text-action" type="button" data-view-target="network">See the group money map</button>
+            </aside>
+          </div>
+        </section>
+
+        <section class="app-view hidden" id="networkPanel" data-view-panel="network" aria-labelledby="networkTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">Visual debt map</p>
+              <h1 id="networkTitle">See how money moves through the group.</h1>
+              <p class="view-intro">
+                Arrows point from the person who owes toward the person who should receive. Select any relationship for its history.
+              </p>
+            </div>
+            <button class="btn btn-primary" type="button" data-open-entry><span aria-hidden="true">+</span> Add entry</button>
+          </div>
+
+          <section class="surface network-surface">
+            <div class="network-legend" aria-label="Network legend">
+              <span><i class="legend-node current"></i> You</span>
+              <span><i class="legend-node person"></i> Other person</span>
+              <span><i class="legend-line"></i> Owes money to</span>
+            </div>
+            <div class="network-graph" id="networkGraph" role="group" aria-label="Interactive graph of current pairwise debts"></div>
+            <p class="network-help">Select a person or arrow for the complete explanation. On a phone, scroll the map sideways or use the list below.</p>
+          </section>
+
+          <section class="surface network-list-surface" aria-labelledby="allRelationshipsTitle">
+            <div class="surface-header compact-header">
+              <div><p class="surface-kicker">Accessible list</p><h2 id="allRelationshipsTitle">Every open relationship</h2></div>
+            </div>
+            <div class="relationship-list pairwise-list" id="pairwiseList"></div>
+          </section>
+        </section>
+      </main>
+
+      <footer class="footer"><p>Solo Knight ledger &middot; Tap any balance to see why it exists.</p></footer>
+    </div>
+
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      <button class="mobile-nav-item active" type="button" data-view-target="overview" aria-current="page"><span aria-hidden="true">&#9679;</span><span>Overview</span></button>
+      <button class="mobile-nav-item" type="button" data-view-target="activity"><span aria-hidden="true">&#9776;</span><span>Activity</span></button>
+      <button class="mobile-compose" type="button" data-open-entry aria-label="Add a ledger entry">+</button>
+      <button class="mobile-nav-item" type="button" data-view-target="settle"><span aria-hidden="true">&#8644;</span><span>Settle</span></button>
+      <button class="mobile-nav-item" type="button" data-view-target="network"><span aria-hidden="true">&#8756;</span><span>Network</span></button>
+    </nav>
+
+    <div id="entryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle" aria-hidden="true">
+      <div class="modal-card modal-entry" id="entryPanel">
+        <div class="modal-header entry-modal-header">
+          <div><p class="surface-kicker">Ledger entry</p><h2 id="entryModalTitle">Add a transaction</h2><p class="panel-note" id="entryModeNote">Create a new transaction.</p></div>
+          <button class="icon-btn" type="button" id="closeEntry" aria-label="Close entry form">&times;</button>
+        </div>
+
+        <form id="entryForm" class="entry-form">
+          <div class="form-section form-section-primary">
+            <div class="form-grid form-grid-2">
+              <label class="field">
+                <span>What happened?</span>
+                <select id="entryType" class="input input-large">
+                  <option value="EXPENSE">Shared expense</option>
+                  <option value="LOAN">Money was lent</option>
+                  <option value="SETTLEMENT">Money was paid back</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Amount (VND)</span>
+                <input id="amountVnd" type="number" min="1" step="1" class="input input-large amount-input" placeholder="250000" required />
+              </label>
+            </div>
+            <label class="field">
+              <span>What was it for?</span>
+              <input id="reason" type="text" class="input input-large" placeholder="Dinner after badminton, taxi home..." maxlength="120" />
+              <small>A specific reason makes every future balance easier to understand.</small>
+            </label>
+            <div class="form-grid form-grid-2">
+              <label class="field">
+                <span>Category</span>
+                <select id="entryCategory" class="input">
+                  <option value="">No category</option>
+                  <option value="FOOD">Food &amp; drinks</option>
+                  <option value="TRANSPORT">Transport</option>
+                  <option value="ENTERTAINMENT">Entertainment</option>
+                  <option value="SHOPPING">Shopping</option>
+                  <option value="STAY">Stay</option>
+                  <option value="OTHER">Other</option>
                 </select>
               </label>
               <label class="field">
                 <span>Event time</span>
                 <div class="event-time-row">
-                  <input
-                  id="eventAt"
-                  type="text"
-                  class="input"
-                  inputmode="numeric"
-                  placeholder="DD-MM-YYYY HH:mm"
-                  title="Format: DD-MM-YYYY HH:mm (24-hour)"
-                  autocomplete="off"
-                  readonly
-                  required
-                />
-                  <button type="button" class="btn btn-ghost" id="eventAtPickerBtn">
-                    Pick
-                  </button>
+                  <input id="eventAt" type="text" class="input" inputmode="numeric" placeholder="DD-MM-YYYY HH:mm" title="Format: DD-MM-YYYY HH:mm (24-hour)" autocomplete="off" readonly required />
+                  <button type="button" class="btn btn-soft" id="eventAtPickerBtn">Pick</button>
                 </div>
-                <input
-                  id="eventAtPicker"
-                  type="datetime-local"
-                  class="input hidden"
-                  step="60"
-                />
+                <input id="eventAtPicker" type="datetime-local" class="input hidden" step="60" />
               </label>
             </div>
+          </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
-              <label class="field">
-                <span>Amount (VND)</span>
-                <input id="amountVnd" type="number" min="1" step="1" class="input" required />
-              </label>
-              <label class="field">
-                <span>Reason</span>
-                <input id="reason" type="text" class="input" placeholder="Dinner, taxi, tickets" />
-              </label>
+          <div class="form-section" id="loanFields">
+            <div class="form-section-heading">
+              <div><h3>Who lent the money?</h3><p>The borrower will owe the lender this amount.</p></div>
+              <button class="text-action" type="button" data-open-people>Add a new lender or borrower</button>
             </div>
-
-            <div id="loanFields" class="stack">
-              <div class="grid gap-4 sm:grid-cols-2">
-                <label class="field">
-                  <span>Lender</span>
-                  <select id="loanFrom" class="input"></select>
-                </label>
-                <label class="field">
-                  <span>Borrower</span>
-                  <select id="loanTo" class="input"></select>
-                </label>
-              </div>
+            <div class="form-grid form-grid-2">
+              <label class="field"><span>Lender</span><select id="loanFrom" class="input input-large"></select></label>
+              <label class="field"><span>Borrower</span><select id="loanTo" class="input input-large"></select></label>
             </div>
+          </div>
 
-            <div id="settlementFields" class="stack hidden">
-              <div class="grid gap-4 sm:grid-cols-2">
-                <label class="field">
-                  <span>Payer</span>
-                  <select id="settleFrom" class="input"></select>
-                </label>
-                <label class="field">
-                  <span>Receiver</span>
-                  <select id="settleTo" class="input"></select>
-                </label>
-              </div>
+          <div class="form-section hidden" id="settlementFields">
+            <div class="form-section-heading">
+              <div><h3>Who paid whom?</h3><p>This reduces the payer&apos;s debt to the receiver.</p></div>
+              <button class="text-action" type="button" data-open-people>Add a new payer or receiver</button>
             </div>
+            <div class="form-grid form-grid-2">
+              <label class="field"><span>Payer</span><select id="settleFrom" class="input input-large"></select></label>
+              <label class="field"><span>Receiver</span><select id="settleTo" class="input input-large"></select></label>
+            </div>
+          </div>
 
-            <div id="expenseFields" class="stack hidden">
-              <div class="grid gap-4 sm:grid-cols-2">
-                <label class="field">
-                  <span>Payer</span>
-                  <select id="expensePayer" class="input"></select>
-                </label>
-                <div class="field">
-                  <span>Split mode</span>
+          <div class="form-section hidden" id="expenseFields">
+            <div class="form-section-heading">
+              <div><h3>Who shared this expense?</h3><p>The payer&apos;s own share is included but does not become debt.</p></div>
+              <button class="text-action" type="button" data-open-people>Add someone to this expense</button>
+            </div>
+            <div class="form-grid form-grid-2 expense-controls">
+              <label class="field"><span>Payer</span><select id="expensePayer" class="input input-large"></select></label>
+              <fieldset class="field">
+                <legend>Split mode</legend>
                 <div class="pill-group">
-                  <label class="pill">
-                    <input type="radio" name="splitMode" value="equal" checked />
-                    Equal
-                  </label>
-                  <label class="pill">
-                    <input type="radio" name="splitMode" value="unequal" />
-                    Unequal (VND)
-                  </label>
+                  <label class="pill"><input type="radio" name="splitMode" value="equal" checked /><span>Equal</span></label>
+                  <label class="pill"><input type="radio" name="splitMode" value="unequal" /><span>Custom VND</span></label>
                 </div>
-              </div>
+              </fieldset>
             </div>
-
-              <div>
-                <div class="participants-header">
-                  <span>Participants</span>
-                  <span class="muted" id="percentTotal">Allocated: 0 VND</span>
-                </div>
-                <div id="participantsList" class="participants"></div>
-                <p class="muted" id="shareTotal"></p>
-              </div>
-            </div>
-
-            <p id="formError" class="form-error hidden"></p>
-            <div class="flex flex-wrap gap-3">
-              <button type="submit" class="btn btn-primary" id="submitEntry">Save Entry</button>
-              <button type="button" class="btn btn-ghost hidden" id="cancelEdit">Cancel Edit</button>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel lg:col-span-7" id="ledgerPanel">
-          <div class="panel-header">
-            <h2 class="panel-title">Ledger</h2>
-            <div class="panel-actions">
-              <label class="toggle">
-                <input type="checkbox" id="showDeleted" />
-                <span>Show deleted</span>
-              </label>
+            <div>
+              <div class="participants-header"><span>Participants</span><span class="muted" id="percentTotal">Allocated: 0 VND</span></div>
+              <div id="participantsList" class="participants"></div>
+              <p class="muted" id="shareTotal" role="status" aria-live="polite"></p>
             </div>
           </div>
-          <div class="panel-body stack">
-            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label class="field">
-                <span>Filter type</span>
-                <select id="ledgerTypeFilter" class="input">
-                  <option value="ALL">All</option>
-                  <option value="LOAN">Loan</option>
-                  <option value="EXPENSE">Expense</option>
-                  <option value="SETTLEMENT">Settlement</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Filter member</span>
-                <select id="ledgerMemberFilter" class="input"></select>
-              </label>
-              <label class="field">
-                <span>From</span>
-                <input id="ledgerFrom" type="date" class="input" />
-              </label>
-              <label class="field">
-                <span>To</span>
-                <input id="ledgerTo" type="date" class="input" />
-              </label>
-            </div>
-            <div id="ledgerList" class="stack"></div>
-          </div>
-        </section>
 
-        <section class="panel lg:col-span-5" id="settlePanel">
-          <div class="panel-header">
-            <h2 class="panel-title">Settle Up</h2>
+          <p id="formError" class="form-error hidden" role="alert"></p>
+          <div class="form-actions">
+            <button type="button" class="btn btn-soft hidden" id="cancelEdit">Cancel edit</button>
+            <button type="submit" class="btn btn-primary" id="submitEntry">Save entry</button>
           </div>
-          <div class="panel-body stack" id="settleList"></div>
-        </section>
-      </main>
-
-      <footer class="footer">
-        <p>Data is stored in Firebase. This identity check is for clarity only.</p>
-      </footer>
+        </form>
+      </div>
     </div>
 
-    <div id="identityModal" class="modal hidden" aria-hidden="true">
-      <div class="modal-card">
+    <div id="peopleModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="peopleModalTitle" aria-hidden="true">
+      <div class="modal-card modal-people">
         <div class="modal-header">
-          <h3>Choose identity</h3>
-          <button class="icon-btn" id="closeIdentity">Close</button>
+          <div><p class="surface-kicker">Ledger contacts</p><h2 id="peopleModalTitle">Add a lender or receiver</h2></div>
+          <button class="icon-btn" type="button" id="closePeople" aria-label="Close people manager">&times;</button>
         </div>
-        <div class="stack">
+        <p class="modal-intro">This only adds a name you can use in transactions. It does not create an account or let that person operate the app.</p>
+        <form id="personForm" class="inline-person-form">
           <label class="field">
-            <span>Member</span>
-            <select id="identityMember" class="input"></select>
+            <span>Person&apos;s name</span>
+            <input id="personName" type="text" class="input input-large" placeholder="e.g. Minh" maxlength="50" autocomplete="off" required />
           </label>
-          <label class="field">
-            <span>Birthday passcode</span>
-            <input id="identityPasscode" type="password" class="input" placeholder="DDMMYYYY" />
-          </label>
-          <p class="form-error hidden" id="identityError"></p>
-          <button class="btn btn-primary" id="confirmIdentity">Confirm</button>
+          <button class="btn btn-primary" type="submit" id="addPerson">Add person</button>
+        </form>
+        <p class="form-error hidden" id="peopleError" role="alert"></p>
+        <div class="people-list" id="peopleList"></div>
+      </div>
+    </div>
+
+    <div id="identityModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="identityModalTitle" aria-hidden="true">
+      <div class="modal-card modal-identity">
+        <div class="modal-header">
+          <div><p class="surface-kicker">Current operator</p><h2 id="identityModalTitle">Who is using the ledger?</h2></div>
+          <button class="icon-btn" type="button" id="closeIdentity" aria-label="Close identity chooser">&times;</button>
+        </div>
+        <div class="form-stack">
+          <label class="field"><span>Member</span><select id="identityMember" class="input input-large"></select></label>
+          <label class="field"><span>Birthday passcode</span><input id="identityPasscode" type="password" class="input input-large" placeholder="DDMMYYYY" /></label>
+          <p class="form-error hidden" id="identityError" role="alert"></p>
+          <button class="btn btn-primary" type="button" id="confirmIdentity">Continue as this person</button>
         </div>
       </div>
     </div>
 
-    <div id="detailModal" class="modal hidden" aria-hidden="true">
+    <div id="detailModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" aria-hidden="true">
       <div class="modal-card modal-wide">
         <div class="modal-header">
-          <h3>Entry detail</h3>
-          <button class="icon-btn" id="closeDetail">Close</button>
+          <div><p class="surface-kicker">Transaction</p><h2 id="detailModalTitle">Entry detail</h2></div>
+          <button class="icon-btn" type="button" id="closeDetail" aria-label="Close entry detail">&times;</button>
         </div>
-        <div id="detailBody" class="stack"></div>
+        <div id="detailBody" class="form-stack"></div>
         <div class="modal-actions">
-          <button class="btn btn-ghost" id="editEntry">Edit</button>
-          <button class="btn btn-ghost" id="restoreEntry">Restore</button>
-          <button class="btn btn-danger" id="deleteEntry">Soft delete</button>
+          <button class="btn btn-soft" type="button" id="editEntry">Edit</button>
+          <button class="btn btn-soft" type="button" id="restoreEntry">Restore</button>
+          <button class="btn btn-danger" type="button" id="deleteEntry">Soft delete</button>
         </div>
       </div>
     </div>
 
-    <div id="breakdownModal" class="modal hidden" aria-hidden="true">
-      <div class="modal-card modal-wide">
+    <div id="breakdownModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="breakdownTitle" aria-hidden="true">
+      <div class="modal-card modal-wide modal-breakdown">
         <div class="modal-header">
-          <h3 id="breakdownTitle">Breakdown</h3>
-          <button class="icon-btn" id="closeBreakdown">Close</button>
+          <div><p class="surface-kicker">Balance explanation</p><h2 id="breakdownTitle">Why this amount?</h2></div>
+          <button class="icon-btn" type="button" id="closeBreakdown" aria-label="Close balance explanation">&times;</button>
         </div>
-        <div id="breakdownBody" class="stack"></div>
+        <div id="breakdownBody" class="form-stack"></div>
       </div>
     </div>
 

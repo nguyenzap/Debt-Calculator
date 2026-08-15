@@ -1,6 +1,6 @@
 # Debt Crew Ledger
 
-Static GitHub Pages app + Firebase backend for tracking shared debts with 4 friends.
+Static GitHub Pages app + Firebase backend for tracking shared debts with four friends and occasional outside contacts.
 
 ## What this includes
 
@@ -8,9 +8,13 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 - Equal or amount-based splits (payer included)
   - Unequal mode supports locking participants and auto-splitting the remaining amount
 - Pairwise debts and net balances
-- Settle up suggestions (minimum transfers)
+- Personalized "you owe" / "owed to you" overview with chronological explanations
+- Reason-first activity search, categories, responsive navigation, and a debt network map
+- One-click JSON download of members and transactions for a portable manual snapshot
+- Practical settle-up suggestions
 - Soft delete and audit log
 - "Birthday auth" identity labeling
+- Ledger-only contacts for people who can owe or receive money without becoming app identities
 
 ## Quick start
 
@@ -38,15 +42,36 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 5. Deploy to GitHub Pages
    - Push this repo and enable Pages for the root.
 
+## Ledger calculation tests
+
+The shared calculation module has no runtime or test dependencies. Run its Node test suite with:
+
+```bash
+node --test tests/*.test.mjs
+```
+
+The suites verify expense allocation, pairwise netting, member balances, settle-up
+suggestions, chronological debt explanations, VND/date formatting, and the static UI contract.
+
 ## Data model
 
 - `groups/{groupId}`
-  - `name`, `timezone`, `members: [{ id, displayName }]`
+  - `name`, `timezone`, `members: [{ id, displayName, ledgerOnly? }]`
+  - App identities are the configured members that have birthday passcodes.
+  - A person added from the People dialog has `ledgerOnly: true`. They can be a
+    lender, borrower, payer, receiver, or expense participant, but cannot be
+    selected as the current app identity and do not need a passcode.
 - `groups/{groupId}/transactions/{txId}`
-  - Common: `type`, `amountVnd`, `reason`, `eventAt`, `createdAt`, `createdBy`, `updatedAt`, `updatedBy`, `isDeleted`, `deletedAt`, `deletedBy`
+  - Common: `type`, `amountVnd`, `reason`, `eventAt`, `createdAt`, `createdBy`,
+    `updatedAt`, `updatedBy`, `isDeleted`, `deletedAt`, `deletedBy`
+  - Optional: `category` (`FOOD`, `TRANSPORT`, `ENTERTAINMENT`, `SHOPPING`,
+    `STAY`, or `OTHER`) and numeric `schemaVersion`
+  - Older transactions may omit either optional field. Treat a missing category
+    as uncategorized and tolerate a missing schema version as legacy data.
   - LOAN: `fromId`, `toId`
   - SETTLEMENT: `fromId`, `toId`
-  - EXPENSE: `payerId`, `participants: [{ memberId, shareVnd }]`
+  - EXPENSE: `payerId`, `participants: [{ memberId, shareVnd }]`, optional
+    `splitMethod` (`equal` or `custom`)
 - `groups/{groupId}/transactions/{txId}/audit/{auditId}`
   - `action`, `at`, `by`, `before`, `after`
 
@@ -56,3 +81,5 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with 4 frie
 - The first load creates the group document if it does not exist.
 - Settle Up is a suggestion view. Record actual payments using SETTLEMENT entries.
 - Event time uses the picker (displayed as `DD-MM-YYYY HH:mm`, 24-hour).
+- The downloaded JSON contains group members and transaction records, not audit subcollections,
+  and is intended for review/manual backup rather than automatic restore.

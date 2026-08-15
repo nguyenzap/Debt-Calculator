@@ -14,11 +14,13 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+import * as ledgerCore from "./ledger-core.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCl-06VL4vj5k-_HSEv_0soXhrZ7yb3qTM",
@@ -54,23 +56,46 @@ const state = {
   members: [...APP_CONFIG.members],
   currentMemberId: null,
   transactions: [],
+  activeView: "overview",
   editingTxId: null,
   selectedTxId: null,
   showDeleted: false,
   splitMode: "equal",
   expenseParticipants: [],
   eventAtDirty: false,
+  modalFocusStack: [],
+  peopleContext: null,
+  breakdownContext: null,
+  detailReturnBreakdown: null,
 };
 
 const el = {
   activeMemberName: document.getElementById("activeMemberName"),
+  activeMemberAvatar: document.getElementById("activeMemberAvatar"),
   authStatus: document.getElementById("authStatus"),
   openIdentity: document.getElementById("openIdentity"),
+  openPeople: document.getElementById("openPeople"),
   refreshData: document.getElementById("refreshData"),
   jumpAddEntry: document.getElementById("jumpAddEntry"),
   jumpSettle: document.getElementById("jumpSettle"),
+  overviewGreeting: document.getElementById("overviewGreeting"),
+  overviewExplainBalance: document.getElementById("overviewExplainBalance"),
+  personalBalanceCard: document.getElementById("personalBalanceCard"),
+  personalBalanceLabel: document.getElementById("personalBalanceLabel"),
+  personalBalanceAmount: document.getElementById("personalBalanceAmount"),
+  personalBalanceFoot: document.getElementById("personalBalanceFoot"),
+  amountYouOwe: document.getElementById("amountYouOwe"),
+  peopleYouOweCount: document.getElementById("peopleYouOweCount"),
+  amountOwedToYou: document.getElementById("amountOwedToYou"),
+  peopleOweCount: document.getElementById("peopleOweCount"),
+  trackedEntryCount: document.getElementById("trackedEntryCount"),
+  myRelationships: document.getElementById("myRelationships"),
+  recentActivity: document.getElementById("recentActivity"),
   entryForm: document.getElementById("entryForm"),
+  entryModal: document.getElementById("entryModal"),
+  closeEntry: document.getElementById("closeEntry"),
   entryType: document.getElementById("entryType"),
+  entryCategory: document.getElementById("entryCategory"),
   eventAt: document.getElementById("eventAt"),
   eventAtPickerBtn: document.getElementById("eventAtPickerBtn"),
   eventAtPicker: document.getElementById("eventAtPicker"),
@@ -94,12 +119,25 @@ const el = {
   netBalances: document.getElementById("netBalances"),
   pairwiseList: document.getElementById("pairwiseList"),
   ledgerList: document.getElementById("ledgerList"),
+  ledgerSearch: document.getElementById("ledgerSearch"),
+  ledgerResultCount: document.getElementById("ledgerResultCount"),
   ledgerTypeFilter: document.getElementById("ledgerTypeFilter"),
   ledgerMemberFilter: document.getElementById("ledgerMemberFilter"),
   ledgerFrom: document.getElementById("ledgerFrom"),
   ledgerTo: document.getElementById("ledgerTo"),
   showDeleted: document.getElementById("showDeleted"),
+  clearLedgerFilters: document.getElementById("clearLedgerFilters"),
+  exportLedger: document.getElementById("exportLedger"),
   settleList: document.getElementById("settleList"),
+  settleSummary: document.getElementById("settleSummary"),
+  networkGraph: document.getElementById("networkGraph"),
+  peopleModal: document.getElementById("peopleModal"),
+  peopleList: document.getElementById("peopleList"),
+  personForm: document.getElementById("personForm"),
+  personName: document.getElementById("personName"),
+  addPerson: document.getElementById("addPerson"),
+  peopleError: document.getElementById("peopleError"),
+  closePeople: document.getElementById("closePeople"),
   identityModal: document.getElementById("identityModal"),
   identityMember: document.getElementById("identityMember"),
   identityPasscode: document.getElementById("identityPasscode"),
@@ -121,13 +159,19 @@ const el = {
 let db = null;
 let auth = null;
 let unsubscribeTransactions = null;
+let unsubscribeGroup = null;
+let networkSimulation = null;
+let d3Library = null;
+let d3LoadPromise = null;
+let networkRenderVersion = 0;
 
 init();
 
 function init() {
   wireEvents();
   loadCurrentMember();
-  updateMemberSelects();
+  updateMemberSelects({ preserveSelections: false });
+  switchView(initialViewFromHash(), { focus: false, updateHash: false });
   setIdentityLock(!state.currentMemberId);
   if (!state.currentMemberId) {
     openIdentityModal();
@@ -137,23 +181,57 @@ function init() {
 }
 
 function wireEvents() {
+  document.querySelectorAll("[data-view-target]").forEach((control) => {
+    control.addEventListener("click", () => switchView(control.dataset.viewTarget));
+  });
+
+  document.querySelectorAll("[data-open-entry]").forEach((control) => {
+    control.addEventListener("click", () => {
+      if (control.dataset.entryType && !state.editingTxId) {
+        el.entryType.value = control.dataset.entryType;
+        updateEntryType();
+      }
+      openEntryComposer();
+    });
+  });
+
+  document.querySelectorAll("[data-open-people]").forEach((control) => {
+    control.addEventListener("click", openPeopleModal);
+  });
+
   el.openIdentity.addEventListener("click", openIdentityModal);
+  el.identityPasscode.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      confirmIdentity();
+    }
+  });
   el.closeIdentity.addEventListener("click", () => {
     closeModal(el.identityModal);
     setIdentityLock(false);
   });
   el.confirmIdentity.addEventListener("click", confirmIdentity);
+  el.openPeople.addEventListener("click", openPeopleModal);
+  el.closePeople.addEventListener("click", () => closeModal(el.peopleModal));
+  el.personForm.addEventListener("submit", addLedgerPerson);
+  el.closeEntry.addEventListener("click", () => closeModal(el.entryModal));
 
   el.refreshData.addEventListener("click", () => {
+    el.authStatus.textContent = "Refreshing...";
     if (unsubscribeTransactions) {
       unsubscribeTransactions();
     }
+    if (unsubscribeGroup) {
+      unsubscribeGroup();
+    }
+    subscribeGroup();
     subscribeTransactions();
   });
 
-  el.jumpAddEntry.addEventListener("click", () => scrollToId("entryPanel"));
-  el.jumpAddEntry.addEventListener("click", refreshEventTimeIfAuto);
-  el.jumpSettle.addEventListener("click", () => scrollToId("settlePanel"));
+  el.jumpAddEntry.addEventListener("click", openEntryComposer);
+  el.jumpSettle.addEventListener("click", () => switchView("settle"));
+  el.overviewExplainBalance.addEventListener("click", openCurrentMemberBreakdown);
+  el.personalBalanceCard.addEventListener("click", openCurrentMemberBreakdown);
 
   el.entryType.addEventListener("change", updateEntryType);
   el.expensePayer.addEventListener("change", () => {
@@ -185,6 +263,7 @@ function wireEvents() {
       }
       ensurePayerIncluded();
       recalcParticipants();
+      restoreParticipantFocus(memberId, "include");
     }
 
     if (event.target.matches("input[data-share]")) {
@@ -194,6 +273,7 @@ function wireEvents() {
         participant.locked = true;
       }
       recalcParticipants();
+      restoreParticipantFocus(memberId, "share");
     }
   });
 
@@ -206,6 +286,7 @@ function wireEvents() {
     if (!participant || !participant.include) return;
     participant.locked = !participant.locked;
     recalcParticipants();
+    restoreParticipantFocus(memberId, "lock");
   });
 
   el.amountVnd.addEventListener("input", () => {
@@ -221,13 +302,8 @@ function wireEvents() {
       setEventAtValue(date, true);
     }
     el.eventAtPicker.classList.add("hidden");
+    el.eventAtPickerBtn.focus();
   });
-  const blockPickerTyping = (event) => {
-    event.preventDefault();
-  };
-  el.eventAtPicker.addEventListener("keydown", blockPickerTyping);
-  el.eventAtPicker.addEventListener("paste", blockPickerTyping);
-
   el.entryForm.addEventListener("submit", handleSubmit);
   el.entryForm.addEventListener("focusin", refreshEventTimeIfAuto);
   el.entryForm.addEventListener("change", (event) => {
@@ -235,16 +311,33 @@ function wireEvents() {
       refreshEventTimeIfAuto();
     }
   });
-  el.cancelEdit.addEventListener("click", clearEdit);
+  el.cancelEdit.addEventListener("click", () => {
+    clearEdit();
+    closeModal(el.entryModal);
+  });
 
   el.ledgerTypeFilter.addEventListener("change", renderLedger);
   el.ledgerMemberFilter.addEventListener("change", renderLedger);
   el.ledgerFrom.addEventListener("change", renderLedger);
   el.ledgerTo.addEventListener("change", renderLedger);
+  el.ledgerSearch.addEventListener("input", renderLedger);
   el.showDeleted.addEventListener("change", () => {
     state.showDeleted = el.showDeleted.checked;
     renderLedger();
   });
+  el.clearLedgerFilters.addEventListener("click", () => {
+    el.ledgerSearch.value = "";
+    el.ledgerTypeFilter.value = "ALL";
+    el.ledgerMemberFilter.value = state.currentMemberId || "ALL";
+    el.ledgerFrom.value = "";
+    el.ledgerTo.value = "";
+    el.showDeleted.checked = false;
+    state.showDeleted = false;
+    el.clearLedgerFilters.closest("details")?.removeAttribute("open");
+    renderLedger();
+    el.ledgerSearch.focus();
+  });
+  el.exportLedger.addEventListener("click", exportLedgerSnapshot);
 
   el.closeDetail.addEventListener("click", () => closeModal(el.detailModal));
   el.editEntry.addEventListener("click", startEditSelected);
@@ -257,11 +350,11 @@ function wireEvents() {
     openBalanceBreakdown(item.dataset.balanceMember);
   });
 
-  el.pairwiseList.addEventListener("click", (event) => {
-    const item = event.target.closest("[data-pair]");
-    if (!item) return;
-    const [debtorId, creditorId] = item.dataset.pair.split("|");
-    openPairwiseBreakdown(debtorId, creditorId);
+  el.myRelationships.addEventListener("click", handlePairSelection);
+  el.pairwiseList.addEventListener("click", handlePairSelection);
+  el.recentActivity.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-tx-id]");
+    if (item) showEntryDetail(item.dataset.txId);
   });
 
   el.closeBreakdown.addEventListener("click", () => closeModal(el.breakdownModal));
@@ -281,10 +374,268 @@ function wireEvents() {
 
     const txEl = event.target.closest("[data-open-tx]");
     if (txEl) {
+      const returnContext = state.breakdownContext;
       closeModal(el.breakdownModal);
-      showEntryDetail(txEl.dataset.openTx);
+      showEntryDetail(txEl.dataset.openTx, { returnToBreakdown: returnContext });
     }
   });
+
+  document.querySelectorAll(".modal").forEach((modal) => {
+    modal.addEventListener("mousedown", (event) => {
+      if (event.target === modal && modal !== el.identityModal) closeModal(modal);
+    });
+  });
+
+  document.addEventListener("keydown", handleModalKeyboard);
+  window.addEventListener("hashchange", () => {
+    switchView(initialViewFromHash(), { focus: false, updateHash: false });
+  });
+}
+
+function handlePairSelection(event) {
+  const item = event.target.closest("[data-pair]");
+  if (!item) return;
+  const [debtorId, creditorId] = item.dataset.pair.split("|");
+  openPairwiseBreakdown(debtorId, creditorId);
+}
+
+function initialViewFromHash() {
+  const requested = window.location.hash.replace("#", "");
+  return ["overview", "activity", "settle", "network"].includes(requested)
+    ? requested
+    : "overview";
+}
+
+function switchView(viewName, { focus = true, updateHash = true } = {}) {
+  const nextView = ["overview", "activity", "settle", "network"].includes(viewName)
+    ? viewName
+    : "overview";
+  state.activeView = nextView;
+
+  document.querySelectorAll("[data-view-panel]").forEach((panel) => {
+    const active = panel.dataset.viewPanel === nextView;
+    panel.classList.toggle("hidden", !active);
+    panel.classList.toggle("active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+  });
+
+  document.querySelectorAll("[data-view-target]").forEach((control) => {
+    const active = control.dataset.viewTarget === nextView;
+    const navigationItem = control.matches(".nav-item, .mobile-nav-item");
+    if (navigationItem) {
+      control.classList.toggle("active", active);
+      if (active) {
+        control.setAttribute("aria-current", "page");
+      } else {
+        control.removeAttribute("aria-current");
+      }
+    }
+  });
+
+  if (updateHash && window.location.hash !== `#${nextView}`) {
+    history.replaceState(null, "", `#${nextView}`);
+  }
+
+  if (nextView === "network") {
+    requestAnimationFrame(renderNetworkFromState);
+  } else if (networkSimulation) {
+    networkSimulation.stop();
+    networkSimulation = null;
+  }
+
+  if (focus) {
+    const heading = document.querySelector(
+      `[data-view-panel="${nextView}"] h1`
+    );
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+  }
+}
+
+function openEntryComposer() {
+  refreshEventTimeIfAuto();
+  openModal(el.entryModal, el.entryType);
+}
+
+function openCurrentMemberBreakdown() {
+  if (state.currentMemberId) openBalanceBreakdown(state.currentMemberId);
+}
+
+function isIdentityMember(memberId) {
+  return Object.prototype.hasOwnProperty.call(
+    APP_CONFIG.birthdayPasscodesByMemberId,
+    memberId
+  );
+}
+
+function identityMembers() {
+  return state.members.filter((member) => isIdentityMember(member.id));
+}
+
+function openPeopleModal(event) {
+  state.peopleContext = event?.currentTarget?.closest("#entryModal")
+    ? el.entryType.value
+    : null;
+  el.personForm.reset();
+  hidePeopleError();
+  renderPeople();
+  openModal(el.peopleModal, el.personName);
+}
+
+function renderPeople() {
+  if (!state.members.length) {
+    el.peopleList.innerHTML = "<p class='empty-state'>No ledger people yet.</p>";
+    return;
+  }
+
+  el.peopleList.innerHTML = state.members
+    .map((member) => {
+      const identity = isIdentityMember(member.id);
+      return `
+        <div class="person-row">
+          <div class="person-identity">
+            <span class="relationship-avatar" aria-hidden="true">${escapeHtml(
+              memberInitials(member.displayName)
+            )}</span>
+            <strong>${escapeHtml(member.displayName)}</strong>
+          </div>
+          <span class="person-badge ${identity ? "" : "contact"}">
+            ${identity ? "App member" : "Ledger only"}
+          </span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function addLedgerPerson(event) {
+  event.preventDefault();
+  hidePeopleError();
+  const displayName = el.personName.value.trim().replace(/\s+/g, " ");
+
+  if (displayName.length < 2) {
+    showPeopleError("Enter at least 2 characters for the person's name.");
+    return;
+  }
+
+  if (
+    state.members.some(
+      (member) => member.displayName.toLocaleLowerCase() === displayName.toLocaleLowerCase()
+    )
+  ) {
+    showPeopleError("That person is already in the ledger.");
+    return;
+  }
+
+  if (!db) {
+    showPeopleError("The ledger is still connecting. Try again in a moment.");
+    return;
+  }
+
+  const personId = `contact-${
+    globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }`;
+  const groupRef = doc(db, "groups", APP_CONFIG.groupId);
+  el.addPerson.disabled = true;
+  el.addPerson.textContent = "Adding...";
+
+  try {
+    const updatedMembers = await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(groupRef);
+      const existingMembers = snapshot.exists() && Array.isArray(snapshot.data().members)
+        ? snapshot.data().members
+        : [...APP_CONFIG.members];
+      const duplicate = existingMembers.some(
+        (member) =>
+          String(member.displayName || "").toLocaleLowerCase() ===
+          displayName.toLocaleLowerCase()
+      );
+      if (duplicate) throw new Error("DUPLICATE_PERSON");
+
+      const nextMembers = [
+        ...existingMembers,
+        { id: personId, displayName, ledgerOnly: true },
+      ];
+      transaction.set(
+        groupRef,
+        { members: nextMembers },
+        { merge: true }
+      );
+      return nextMembers;
+    });
+
+    state.members = updatedMembers;
+    updateMemberSelects({
+      newContactId: state.peopleContext ? personId : null,
+    });
+    renderPeople();
+    renderAll();
+    el.personForm.reset();
+    if (state.peopleContext) {
+      closeModal(el.peopleModal);
+      state.peopleContext = null;
+    } else {
+      el.personName.focus();
+    }
+  } catch (error) {
+    console.error("Failed to add ledger person", error);
+    showPeopleError(
+      error?.message === "DUPLICATE_PERSON"
+        ? "That person is already in the ledger."
+        : "Could not add this person. Please try again."
+    );
+  } finally {
+    el.addPerson.disabled = false;
+    el.addPerson.textContent = "Add person";
+  }
+}
+
+function showPeopleError(message) {
+  el.peopleError.textContent = message;
+  el.peopleError.classList.remove("hidden");
+}
+
+function hidePeopleError() {
+  el.peopleError.textContent = "";
+  el.peopleError.classList.add("hidden");
+}
+
+function handleModalKeyboard(event) {
+  const openModals = [...document.querySelectorAll(".modal:not(.hidden)")];
+  const modal = openModals.at(-1);
+  if (!modal) return;
+
+  if (event.key === "Escape") {
+    if (modal === el.identityModal && !state.currentMemberId) return;
+    event.preventDefault();
+    closeModal(modal);
+    return;
+  }
+
+  if (event.key !== "Tab") return;
+  const focusable = [...modal.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+  )].filter(
+    (control) => !control.closest(".hidden") && control.getClientRects().length > 0
+  );
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function startFirebase() {
@@ -305,6 +656,7 @@ function startFirebase() {
       updateMemberSelects();
       ensurePayerIncluded();
       recalcParticipants();
+      subscribeGroup();
       subscribeTransactions();
       if (!state.currentMemberId) {
         openIdentityModal();
@@ -337,17 +689,46 @@ async function ensureGroupDoc() {
   }
 }
 
+function subscribeGroup() {
+  if (!db) return;
+  const groupRef = doc(db, "groups", APP_CONFIG.groupId);
+  unsubscribeGroup = onSnapshot(
+    groupRef,
+    (snapshot) => {
+      if (!snapshot.exists()) return;
+      const members = snapshot.data().members;
+      if (!Array.isArray(members)) return;
+      state.members = members;
+      reconcileCurrentMember();
+      updateMemberSelects({ preserveSelections: true });
+      renderAll();
+    },
+    (error) => {
+      console.error("Group subscription failed", error);
+      el.authStatus.textContent = "People sync unavailable";
+    }
+  );
+}
+
 function subscribeTransactions() {
   if (!db) return;
   const txCol = collection(db, "groups", APP_CONFIG.groupId, "transactions");
   const txQuery = query(txCol, orderBy("eventAt", "desc"));
-  unsubscribeTransactions = onSnapshot(txQuery, (snapshot) => {
-    state.transactions = snapshot.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...docSnap.data(),
-    }));
-    renderAll();
-  });
+  unsubscribeTransactions = onSnapshot(
+    txQuery,
+    (snapshot) => {
+      state.transactions = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+      el.authStatus.textContent = "Connected";
+      renderAll();
+    },
+    (error) => {
+      console.error("Ledger subscription failed", error);
+      el.authStatus.textContent = "Sync unavailable";
+    }
+  );
 }
 
 function renderAll() {
@@ -355,6 +736,7 @@ function renderAll() {
   renderLedger();
   renderSettleUp();
   updateActiveMember();
+  if (state.activeView === "network") renderNetworkFromState();
 }
 
 function updateActiveMember() {
@@ -362,6 +744,18 @@ function updateActiveMember() {
     (entry) => entry.id === state.currentMemberId
   );
   el.activeMemberName.textContent = member ? member.displayName : "Not set";
+  el.openIdentity.setAttribute(
+    "aria-label",
+    member
+      ? `Switch identity, currently ${member.displayName}`
+      : "Choose who is using the ledger"
+  );
+  el.activeMemberAvatar.textContent = member
+    ? memberInitials(member.displayName)
+    : "?";
+  el.overviewGreeting.textContent = member
+    ? `${member.displayName}, this is what you owe, what you are owed, and every reason behind it.`
+    : "Your personal balance and every entry behind it, in one place.";
 }
 
 function applyMemberDefaults() {
@@ -383,7 +777,8 @@ function loadCurrentMember() {
 function reconcileCurrentMember() {
   if (
     state.currentMemberId &&
-    !state.members.some((entry) => entry.id === state.currentMemberId)
+    (!state.members.some((entry) => entry.id === state.currentMemberId) ||
+      !isIdentityMember(state.currentMemberId))
   ) {
     state.currentMemberId = null;
     localStorage.removeItem(STORAGE_KEY);
@@ -392,11 +787,12 @@ function reconcileCurrentMember() {
 }
 
 function openIdentityModal() {
-  el.identityMember.value = state.currentMemberId || state.members[0]?.id || "";
+  el.identityMember.value =
+    state.currentMemberId || identityMembers()[0]?.id || "";
   el.identityPasscode.value = "";
   hideIdentityError();
   setIdentityLock(!state.currentMemberId);
-  openModal(el.identityModal);
+  openModal(el.identityModal, el.identityMember);
 }
 
 function confirmIdentity() {
@@ -415,7 +811,9 @@ function confirmIdentity() {
   hideIdentityError();
   closeModal(el.identityModal);
   updateActiveMember();
+  updateMemberSelects({ preserveSelections: true });
   applyMemberDefaults();
+  renderAll();
   setIdentityLock(false);
 }
 
@@ -428,7 +826,24 @@ function hideIdentityError() {
   el.identityError.classList.add("hidden");
 }
 
-function updateMemberSelects() {
+function updateMemberSelects({ preserveSelections = true, newContactId = null } = {}) {
+  const previous = preserveSelections
+    ? {
+        loanFrom: el.loanFrom.value,
+        loanTo: el.loanTo.value,
+        settleFrom: el.settleFrom.value,
+        settleTo: el.settleTo.value,
+        expensePayer: el.expensePayer.value,
+        ledgerMember: el.ledgerMemberFilter.value,
+        participants: new Map(
+          state.expenseParticipants.map((participant) => [
+            participant.memberId,
+            { ...participant },
+          ])
+        ),
+      }
+    : null;
+
   const options = state.members
     .map(
       (member) =>
@@ -443,21 +858,75 @@ function updateMemberSelects() {
   el.settleFrom.innerHTML = options;
   el.settleTo.innerHTML = options;
   el.expensePayer.innerHTML = options;
-  el.identityMember.innerHTML = options;
 
-  const ledgerOptions = [
-    '<option value="ALL">All</option>',
-    ...state.members.map(
+  el.identityMember.innerHTML = identityMembers()
+    .map(
       (member) =>
         `<option value="${escapeHtml(member.id)}">${escapeHtml(
           member.displayName
+        )}</option>`
+    )
+    .join("");
+
+  const ledgerOptions = [
+    '<option value="ALL">Everyone</option>',
+    ...state.members.map(
+      (member) =>
+        `<option value="${escapeHtml(member.id)}">${escapeHtml(
+          member.id === state.currentMemberId
+            ? `My activity (${member.displayName})`
+            : member.displayName
         )}</option>`
     ),
   ].join("");
   el.ledgerMemberFilter.innerHTML = ledgerOptions;
 
-  initParticipants();
-  applyMemberDefaults();
+  const validId = (memberId) =>
+    state.members.some((member) => member.id === memberId);
+  if (previous) {
+    el.loanFrom.value = validId(previous.loanFrom)
+      ? previous.loanFrom
+      : state.currentMemberId || state.members[0]?.id || "";
+    el.loanTo.value = validId(previous.loanTo)
+      ? previous.loanTo
+      : newContactId || state.members[1]?.id || state.members[0]?.id || "";
+    el.settleFrom.value = validId(previous.settleFrom)
+      ? previous.settleFrom
+      : state.currentMemberId || state.members[0]?.id || "";
+    el.settleTo.value = validId(previous.settleTo)
+      ? previous.settleTo
+      : newContactId || state.members[1]?.id || state.members[0]?.id || "";
+    el.expensePayer.value = validId(previous.expensePayer)
+      ? previous.expensePayer
+      : state.currentMemberId || state.members[0]?.id || "";
+    el.ledgerMemberFilter.value =
+      previous.ledgerMember === "ALL" || validId(previous.ledgerMember)
+        ? previous.ledgerMember
+        : state.currentMemberId || "ALL";
+    state.expenseParticipants = state.members.map((member) =>
+      previous.participants.get(member.id) || {
+        memberId: member.id,
+        include: Boolean(newContactId && state.peopleContext === "EXPENSE" && member.id === newContactId),
+        shareVnd: 0,
+        locked: false,
+      }
+    );
+    if (newContactId && validId(newContactId)) {
+      if (state.peopleContext === "LOAN") el.loanTo.value = newContactId;
+      if (state.peopleContext === "SETTLEMENT") el.settleTo.value = newContactId;
+    }
+    ensurePayerIncluded();
+    renderParticipants();
+    recalcParticipants();
+  } else {
+    initParticipants();
+    applyMemberDefaults();
+    el.ledgerMemberFilter.value = state.currentMemberId || "ALL";
+  }
+
+  if (state.currentMemberId && isIdentityMember(state.currentMemberId)) {
+    el.identityMember.value = state.currentMemberId;
+  }
 }
 
 function initParticipants() {
@@ -482,6 +951,7 @@ function renderParticipants() {
   const rows = state.expenseParticipants
     .map((entry) => {
       const member = memberName(entry.memberId);
+      const memberId = escapeHtml(entry.memberId);
       const isPayer = entry.memberId === el.expensePayer.value;
       const shareValue = Number.isFinite(entry.shareVnd) ? entry.shareVnd : 0;
       const lockLabel = entry.locked ? "Locked" : "Auto";
@@ -489,29 +959,32 @@ function renderParticipants() {
       const lockDisabled = state.splitMode === "equal" || !entry.include;
       return `
         <div class="participant-row">
-          <div class="participant-name">
+          <label class="participant-name">
             <input
               type="checkbox"
-              data-member-id="${escapeHtml(entry.memberId)}"
+              data-member-id="${memberId}"
               ${entry.include ? "checked" : ""}
               ${isPayer ? "disabled" : ""}
             />
             <span>${escapeHtml(member)}${isPayer ? " (payer)" : ""}</span>
-          </div>
+          </label>
           <input
             type="number"
             min="0"
             step="1"
             class="input"
-            data-member-id="${entry.memberId}"
+            data-member-id="${memberId}"
             data-share
+            aria-label="${escapeHtml(`${member}'s share in VND`)}"
             value="${shareValue}"
             ${state.splitMode === "equal" || !entry.include ? "disabled" : ""}
           />
           <button
             type="button"
             class="lock-btn ${lockClass}"
-            data-lock="${entry.memberId}"
+            data-lock="${memberId}"
+            aria-label="${escapeHtml(`${lockLabel} ${member}'s share`)}"
+            aria-pressed="${entry.locked ? "true" : "false"}"
             ${lockDisabled ? "disabled" : ""}
           >
             ${lockLabel}
@@ -523,6 +996,19 @@ function renderParticipants() {
 
   el.participantsList.innerHTML = rows;
   updateShareSummary();
+}
+
+function restoreParticipantFocus(memberId, controlType) {
+  requestAnimationFrame(() => {
+    const controls = [...el.participantsList.querySelectorAll("input, button")];
+    const target = controls.find((control) => {
+      if (controlType === "lock") return control.dataset.lock === memberId;
+      if (control.dataset.memberId !== memberId) return false;
+      if (controlType === "include") return control.matches("input[type='checkbox']");
+      return control.hasAttribute("data-share");
+    });
+    target?.focus();
+  });
 }
 
 function updateShareSummary() {
@@ -548,78 +1034,12 @@ function updateShareSummary() {
 }
 
 function recalcParticipants() {
-  state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-    ...entry,
-    shareVnd: entry.include ? Math.max(0, Number(entry.shareVnd) || 0) : 0,
-    locked: entry.include ? Boolean(entry.locked) : false,
-  }));
-
-  const included = state.expenseParticipants.filter((entry) => entry.include);
-  if (!included.length) {
-    renderParticipants();
-    return;
-  }
-
   const amount = parseInt(el.amountVnd.value, 10);
-  if (state.splitMode === "equal") {
-    state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-      ...entry,
-      locked: false,
-    }));
-    if (!Number.isNaN(amount) && amount > 0) {
-      applyEqualShares(amount);
-    } else {
-      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-        ...entry,
-        shareVnd: entry.include ? 0 : entry.shareVnd,
-      }));
-    }
-  } else {
-    if (Number.isNaN(amount) || amount <= 0) {
-      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-        ...entry,
-        shareVnd: entry.include && !entry.locked ? 0 : entry.shareVnd,
-      }));
-      renderParticipants();
-      return;
-    }
-
-    const lockedEntries = included.filter((entry) => entry.locked);
-    const unlockedEntries = included.filter((entry) => !entry.locked);
-    const lockedTotal = lockedEntries.reduce(
-      (sum, entry) => sum + (entry.shareVnd || 0),
-      0
-    );
-
-    if (!unlockedEntries.length) {
-      renderParticipants();
-      return;
-    }
-
-    const remaining = amount - lockedTotal;
-    if (remaining < 0) {
-      state.expenseParticipants = state.expenseParticipants.map((entry) => ({
-        ...entry,
-        shareVnd: entry.include && !entry.locked ? 0 : entry.shareVnd,
-      }));
-      renderParticipants();
-      return;
-    }
-
-    const shareById = buildEqualSharesMap(
-      remaining,
-      unlockedEntries.map((entry) => entry.memberId)
-    );
-
-    state.expenseParticipants = state.expenseParticipants.map((entry) => {
-      if (!entry.include || entry.locked) return entry;
-      return {
-        ...entry,
-        shareVnd: shareById.get(entry.memberId) || 0,
-      };
-    });
-  }
-
+  state.expenseParticipants = ledgerCore.recalculateExpenseShares(
+    state.expenseParticipants,
+    Number.isNaN(amount) ? 0 : amount,
+    state.splitMode
+  );
   renderParticipants();
 }
 
@@ -627,24 +1047,11 @@ function applyEqualShares(amount) {
   const memberIds = state.expenseParticipants
     .filter((entry) => entry.include)
     .map((entry) => entry.memberId);
-  const shareById = buildEqualSharesMap(amount, memberIds);
+  const shareById = ledgerCore.buildEqualSharesMap(amount, memberIds);
   state.expenseParticipants = state.expenseParticipants.map((entry) => ({
     ...entry,
     shareVnd: entry.include ? shareById.get(entry.memberId) || 0 : 0,
   }));
-}
-
-function buildEqualSharesMap(amount, memberIds) {
-  const count = memberIds.length;
-  const shareById = new Map();
-  if (!count) return shareById;
-  const base = Math.floor(amount / count);
-  const remainder = amount - base * count;
-  const ordered = [...memberIds].sort((a, b) => a.localeCompare(b));
-  ordered.forEach((memberId, index) => {
-    shareById.set(memberId, base + (index < remainder ? 1 : 0));
-  });
-  return shareById;
 }
 
 function updateEntryType() {
@@ -670,6 +1077,10 @@ async function handleSubmit(event) {
 
   if (!state.currentMemberId) {
     showFormError("Pick your identity before saving.");
+    return;
+  }
+  if (!db) {
+    showFormError("The ledger is still connecting. Try again in a moment.");
     return;
   }
 
@@ -699,6 +1110,8 @@ async function handleSubmit(event) {
     type,
     amountVnd: amount,
     reason: reason || (type === "SETTLEMENT" ? "Settlement" : ""),
+    category: el.entryCategory.value || null,
+    schemaVersion: 2,
     eventAt,
   };
 
@@ -719,7 +1132,8 @@ async function handleSubmit(event) {
       fromId,
       toId,
     };
-    await saveTransaction(payload);
+    await submitTransactionPayload(payload);
+    return;
   }
 
   if (type === "SETTLEMENT") {
@@ -734,7 +1148,8 @@ async function handleSubmit(event) {
       fromId,
       toId,
     };
-    await saveTransaction(payload);
+    await submitTransactionPayload(payload);
+    return;
   }
 
   if (type === "EXPENSE") {
@@ -761,8 +1176,28 @@ async function handleSubmit(event) {
       ...commonFields,
       payerId,
       participants,
+      splitMethod: state.splitMode === "equal" ? "equal" : "custom",
     };
+    await submitTransactionPayload(payload);
+  }
+}
+
+async function submitTransactionPayload(payload) {
+  const previousLabel = el.submitEntry.textContent;
+  el.submitEntry.disabled = true;
+  el.submitEntry.textContent = state.editingTxId ? "Updating..." : "Saving...";
+  try {
     await saveTransaction(payload);
+  } catch (error) {
+    console.error("Failed to save transaction", error);
+    showFormError("The entry could not be saved. Check the connection and try again.");
+  } finally {
+    el.submitEntry.disabled = false;
+    if (!state.editingTxId && el.entryModal.classList.contains("hidden")) {
+      el.submitEntry.textContent = "Save Entry";
+    } else {
+      el.submitEntry.textContent = previousLabel;
+    }
   }
 }
 
@@ -795,6 +1230,7 @@ async function saveTransaction(payload) {
     });
 
     clearEdit();
+    closeModal(el.entryModal);
     return;
   } else {
     const txCol = collection(db, "groups", APP_CONFIG.groupId, "transactions");
@@ -836,6 +1272,7 @@ async function saveTransaction(payload) {
   updateEntryType();
   setDefaultEventTime();
   applyMemberDefaults();
+  closeModal(el.entryModal);
 }
 
 async function addAudit(txId, { action, before, after }) {
@@ -857,82 +1294,120 @@ async function addAudit(txId, { action, before, after }) {
 }
 
 function renderDashboard() {
-  const validTx = state.transactions.filter((entry) => !entry.isDeleted);
-  const edges = buildEdges(validTx);
-  const netEdges = netPairwise(edges);
-  const balances = computeNetBalances(netEdges);
+  const activeTransactions = state.transactions.filter((entry) => !entry.isDeleted);
+  const { netEdges, balances } = ledgerCore.buildLedgerSummary(
+    activeTransactions,
+    state.members
+  );
+  const currentMemberId = state.currentMemberId;
+  const relationships = personalRelationships(netEdges, currentMemberId);
+  const youOwe = relationships
+    .filter((relationship) => relationship.kind === "owes")
+    .reduce((sum, relationship) => sum + relationship.amount, 0);
+  const owedToYou = relationships
+    .filter((relationship) => relationship.kind === "owed")
+    .reduce((sum, relationship) => sum + relationship.amount, 0);
+  const net = currentMemberId ? balances[currentMemberId] || 0 : 0;
 
+  el.personalBalanceLabel.textContent =
+    net > 0 ? "You should receive overall" : net < 0 ? "You need to pay overall" : "Your net balance";
+  el.personalBalanceAmount.textContent = currentMemberId
+    ? formatSignedVnd(net)
+    : "Choose identity";
+  el.personalBalanceCard.dataset.balanceState =
+    net > 0 ? "receive" : net < 0 ? "pay" : "even";
+  el.personalBalanceFoot.textContent = currentMemberId
+    ? relationships.length
+      ? `${relationships.length} open ${relationships.length === 1 ? "relationship" : "relationships"}; tap to see every reason.`
+      : "You are all square with everyone in this ledger."
+    : "Choose who is using the ledger to see a personal explanation.";
+  el.amountYouOwe.textContent = formatVnd(youOwe);
+  el.peopleYouOweCount.textContent = countPeopleText(
+    relationships.filter((relationship) => relationship.kind === "owes").length,
+    "person to pay",
+    "people to pay"
+  );
+  el.amountOwedToYou.textContent = formatVnd(owedToYou);
+  el.peopleOweCount.textContent = countPeopleText(
+    relationships.filter((relationship) => relationship.kind === "owed").length,
+    "person who owes you",
+    "people who owe you"
+  );
+  el.trackedEntryCount.textContent = String(activeTransactions.length);
+
+  el.myRelationships.innerHTML = renderPersonalRelationships(relationships);
+  const recent = activeTransactions
+    .filter((entry) => currentMemberId && transactionInvolves(entry, currentMemberId))
+    .slice()
+    .sort((a, b) => (getEventDate(b)?.getTime() || 0) - (getEventDate(a)?.getTime() || 0))
+    .slice(0, 5);
+  el.recentActivity.innerHTML = recent.length
+    ? recent.map((entry) => renderActivityItem(entry, { compact: true })).join("")
+    : `<div class="empty-state"><strong>No activity for you yet</strong><span>Add an entry and its reason will appear here.</span></div>`;
   el.netBalances.innerHTML = renderNetBalances(balances);
   el.pairwiseList.innerHTML = renderPairwise(netEdges);
 }
 
-function buildEdges(transactions) {
-  const edges = new Map();
+function countPeopleText(count, singular, plural) {
+  if (!count) return singular === "person to pay" ? "No one to pay" : "No one owes you";
+  return `${count} ${count === 1 ? singular : plural}`;
+}
 
-  const addEdge = (debtorId, creditorId, amount) => {
-    if (!debtorId || !creditorId || debtorId === creditorId) return;
-    const key = `${debtorId}|${creditorId}`;
-    edges.set(key, (edges.get(key) || 0) + amount);
-  };
-
-  transactions.forEach((tx) => {
-    if (tx.type === "LOAN") {
-      addEdge(tx.toId, tx.fromId, tx.amountVnd);
-    }
-
-    if (tx.type === "SETTLEMENT") {
-      addEdge(tx.fromId, tx.toId, -tx.amountVnd);
-    }
-
-    if (tx.type === "EXPENSE") {
-      const payerId = tx.payerId;
-      (tx.participants || []).forEach((part) => {
-        if (part.memberId !== payerId) {
-          addEdge(part.memberId, payerId, part.shareVnd || 0);
-        }
+function personalRelationships(netEdges, memberId) {
+  if (!memberId) return [];
+  const relationships = [];
+  netEdges.forEach((amount, key) => {
+    const [debtorId, creditorId] = key.split("|");
+    if (debtorId === memberId) {
+      relationships.push({
+        debtorId,
+        creditorId,
+        otherId: creditorId,
+        amount,
+        kind: "owes",
+      });
+    } else if (creditorId === memberId) {
+      relationships.push({
+        debtorId,
+        creditorId,
+        otherId: debtorId,
+        amount,
+        kind: "owed",
       });
     }
   });
-
-  return edges;
+  return relationships.sort((a, b) => b.amount - a.amount);
 }
 
-function netPairwise(edges) {
-  const netEdges = new Map();
-  const ids = state.members.map((member) => member.id);
-
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      const a = ids[i];
-      const b = ids[j];
-      const ab = edges.get(`${a}|${b}`) || 0;
-      const ba = edges.get(`${b}|${a}`) || 0;
-      const net = ab - ba;
-
-      if (net > 0) {
-        netEdges.set(`${a}|${b}`, net);
-      } else if (net < 0) {
-        netEdges.set(`${b}|${a}`, Math.abs(net));
-      }
-    }
+function renderPersonalRelationships(relationships) {
+  if (!state.currentMemberId) {
+    return `<div class="empty-state"><strong>Choose your identity</strong><span>Your personal debts will appear here.</span></div>`;
   }
-
-  return netEdges;
-}
-
-function computeNetBalances(netEdges) {
-  const balances = {};
-  state.members.forEach((member) => {
-    balances[member.id] = 0;
-  });
-
-  netEdges.forEach((amount, key) => {
-    const [debtorId, creditorId] = key.split("|");
-    balances[debtorId] -= amount;
-    balances[creditorId] += amount;
-  });
-
-  return balances;
+  if (!relationships.length) {
+    return `<div class="empty-state"><strong>You are all square</strong><span>There are no open debts between you and anyone else.</span></div>`;
+  }
+  return relationships
+    .map((relationship) => {
+      const other = memberName(relationship.otherId);
+      const history = buildContributions((transaction) =>
+        pairDelta(transaction, relationship.debtorId, relationship.creditorId)
+      );
+      return `
+        <button class="relationship-row ${relationship.kind}" type="button" data-pair="${escapeHtml(
+          `${relationship.debtorId}|${relationship.creditorId}`
+        )}">
+          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(other))}</span>
+          <span class="relationship-copy">
+            <strong>${escapeHtml(other)}</strong>
+            <span>${history.rows.length} ${history.rows.length === 1 ? "entry explains" : "entries explain"} this amount</span>
+          </span>
+          <span class="relationship-amount">
+            <strong>${formatVnd(relationship.amount)}</strong>
+            <span>${relationship.kind === "owes" ? "You owe" : "Owes you"}</span>
+          </span>
+        </button>`;
+    })
+    .join("");
 }
 
 function renderNetBalances(balances) {
@@ -946,17 +1421,19 @@ function renderNetBalances(balances) {
   return entries
     .map(([memberId, net]) => {
       const label = escapeHtml(memberName(memberId));
-      const direction = net >= 0 ? "receive" : "pay";
+      const direction = net > 0 ? "receive" : net < 0 ? "pay" : "even";
       const amount = formatVnd(Math.abs(net));
       return `
-        <div class="ledger-item clickable" data-balance-member="${escapeHtml(memberId)}">
-          <div class="flex items-center justify-between">
-            <strong>${label}</strong>
-            <span class="chip ${net >= 0 ? "" : "settlement"}">${direction}</span>
-          </div>
-          <div class="ledger-meta">${amount}</div>
-          <div class="item-hint">Click to see the accumulation</div>
-        </div>
+        <button class="group-balance ${direction}" type="button" data-balance-member="${escapeHtml(memberId)}">
+          <span class="group-balance-person">
+            <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(memberName(memberId)))}</span>
+            <strong>${label}${memberId === state.currentMemberId ? " (you)" : ""}</strong>
+          </span>
+          <span class="group-balance-value">
+            <strong>${amount}</strong>
+            <span>${direction === "receive" ? "should receive" : direction === "pay" ? "should pay" : "all square"}</span>
+          </span>
+        </button>
       `;
     })
     .join("");
@@ -964,7 +1441,7 @@ function renderNetBalances(balances) {
 
 function renderPairwise(netEdges) {
   if (netEdges.size === 0) {
-    return "<p class='muted'>No pairwise debts yet.</p>";
+    return `<div class="empty-state"><strong>No open relationships</strong><span>The group is completely settled.</span></div>`;
   }
 
   const items = [];
@@ -980,204 +1457,256 @@ function renderPairwise(netEdges) {
   return items
     .sort((a, b) => b.amount - a.amount)
     .map((item) => {
+      const debtor = memberName(item.debtor);
+      const creditor = memberName(item.creditor);
       return `
-        <div class="ledger-item clickable" data-pair="${escapeHtml(
+        <button class="relationship-row owes" type="button" data-pair="${escapeHtml(
           item.debtor
         )}|${escapeHtml(item.creditor)}">
-          <div class="flex items-center justify-between">
-            <strong>${escapeHtml(memberName(item.debtor))} owes ${escapeHtml(
-        memberName(item.creditor)
-      )}</strong>
-            <span class="chip loan">Debt</span>
-          </div>
-          <div class="ledger-meta">${formatVnd(item.amount)}</div>
-          <div class="item-hint">Click to see the accumulation</div>
-        </div>
+          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(debtor))}</span>
+          <span class="relationship-copy">
+            <strong>${escapeHtml(debtor)} <span aria-hidden="true">&rarr;</span> ${escapeHtml(creditor)}</strong>
+            <span>${escapeHtml(debtor)} owes ${escapeHtml(creditor)}</span>
+          </span>
+          <span class="relationship-amount"><strong>${formatVnd(item.amount)}</strong><span>Open explanation</span></span>
+        </button>
       `;
     })
     .join("");
 }
 
-function activeTransactionsAsc() {
-  return state.transactions
-    .filter((entry) => !entry.isDeleted)
-    .slice()
-    .sort((a, b) => (getEventDate(a) || 0) - (getEventDate(b) || 0));
+async function renderNetworkFromState() {
+  if (!el.networkGraph) return;
+  const renderVersion = ++networkRenderVersion;
+  if (networkSimulation) networkSimulation.stop();
+
+  const { netEdges } = ledgerCore.buildLedgerSummary(
+    state.transactions,
+    state.members
+  );
+  const links = [...netEdges.entries()].map(([key, amount]) => {
+    const [debtorId, creditorId] = key.split("|");
+    return {
+      source: debtorId,
+      target: creditorId,
+      debtorId,
+      creditorId,
+      amount,
+    };
+  });
+  const nodes = state.members.map((member) => ({
+    id: member.id,
+    name: member.displayName,
+    current: member.id === state.currentMemberId,
+  }));
+
+  el.networkGraph.innerHTML = "";
+  if (!links.length) {
+    el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>No open debt to map</strong><span>Everyone in the ledger is currently square.</span></div>`;
+    return;
+  }
+
+  el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>Drawing the money map...</strong><span>The exact relationships are already available in the list below.</span></div>`;
+  let d3;
+  try {
+    d3 = await loadD3();
+  } catch (error) {
+    console.error("Could not load the optional network renderer", error);
+    el.networkGraph.innerHTML = `<div class="empty-state network-empty"><strong>The visual map is unavailable</strong><span>Use the complete relationship list below; it contains the same amounts and explanations.</span></div>`;
+    return;
+  }
+  if (renderVersion !== networkRenderVersion || state.activeView !== "network") return;
+
+  const width = 900;
+  const height = 500;
+  el.networkGraph.innerHTML = "";
+  const svg = d3
+    .select(el.networkGraph)
+    .append("svg")
+    .attr("viewBox", `0 0 ${width} ${height}`)
+    .attr("aria-label", "Current debt relationships. The same values are available in the list below.");
+
+  const defs = svg.append("defs");
+  defs
+    .append("marker")
+    .attr("id", "debt-arrow")
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 8)
+    .attr("refY", 0)
+    .attr("markerWidth", 7)
+    .attr("markerHeight", 7)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-5L10,0L0,5")
+    .attr("fill", "#958979");
+
+  const linkGroup = svg
+    .append("g")
+    .selectAll("g")
+    .data(links)
+    .join("g")
+    .attr("role", "button")
+    .attr("tabindex", 0)
+    .attr(
+      "aria-label",
+      (link) =>
+        `${memberName(link.debtorId)} owes ${memberName(link.creditorId)} ${formatVnd(link.amount)}. Open explanation.`
+    )
+    .on("click", (_event, link) =>
+      openPairwiseBreakdown(link.debtorId, link.creditorId)
+    )
+    .on("keydown", (event, link) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openPairwiseBreakdown(link.debtorId, link.creditorId);
+      }
+    });
+
+  const visibleLinks = linkGroup
+    .append("line")
+    .attr("class", "network-link")
+    .attr("stroke-width", (link) => Math.max(2, Math.min(8, 2 + Math.log10(link.amount + 1))))
+    .attr("marker-end", "url(#debt-arrow)");
+  linkGroup.append("line").attr("class", "network-link-hit");
+  const linkLabels = linkGroup
+    .append("text")
+    .attr("class", "network-link-label")
+    .text((link) => compactVnd(link.amount));
+
+  const node = svg
+    .append("g")
+    .selectAll("g")
+    .data(nodes)
+    .join("g")
+    .attr("class", (person) => `network-node${person.current ? " current" : ""}`)
+    .attr("role", "button")
+    .attr("tabindex", 0)
+    .attr("aria-label", (person) => `Open ${person.current ? "your" : `${person.name}'s`} balance explanation`)
+    .on("click", (_event, person) => openBalanceBreakdown(person.id))
+    .on("keydown", (event, person) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openBalanceBreakdown(person.id);
+      }
+    });
+
+  node.append("circle").attr("r", 34);
+  node
+    .append("text")
+    .attr("dy", "0.35em")
+    .text((person) => memberInitials(person.name));
+  node
+    .append("text")
+    .attr("class", "network-name")
+    .attr("y", 55)
+    .text((person) => person.current ? `${person.name} (you)` : person.name);
+
+  const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+  const endpoints = (link) => {
+    const dx = link.target.x - link.source.x;
+    const dy = link.target.y - link.source.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    return {
+      x1: link.source.x + (dx / distance) * 38,
+      y1: link.source.y + (dy / distance) * 38,
+      x2: link.target.x - (dx / distance) * 45,
+      y2: link.target.y - (dy / distance) * 45,
+    };
+  };
+
+  networkSimulation = d3
+    .forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id((person) => person.id).distance(175).strength(0.85))
+    .force("charge", d3.forceManyBody().strength(-540))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collision", d3.forceCollide(72))
+    .on("tick", () => {
+      nodes.forEach((person) => {
+        person.x = clamp(person.x, 65, width - 65);
+        person.y = clamp(person.y, 65, height - 75);
+      });
+      visibleLinks
+        .attr("x1", (link) => endpoints(link).x1)
+        .attr("y1", (link) => endpoints(link).y1)
+        .attr("x2", (link) => endpoints(link).x2)
+        .attr("y2", (link) => endpoints(link).y2);
+      linkGroup
+        .select(".network-link-hit")
+        .attr("x1", (link) => endpoints(link).x1)
+        .attr("y1", (link) => endpoints(link).y1)
+        .attr("x2", (link) => endpoints(link).x2)
+        .attr("y2", (link) => endpoints(link).y2);
+      linkLabels
+        .attr("x", (link) => (link.source.x + link.target.x) / 2)
+        .attr("y", (link) => (link.source.y + link.target.y) / 2 - 8);
+      node.attr("transform", (person) => `translate(${person.x},${person.y})`);
+    });
+
+  node.call(
+    d3
+      .drag()
+      .on("start", (event, person) => {
+        if (!event.active) networkSimulation.alphaTarget(0.3).restart();
+        person.fx = person.x;
+        person.fy = person.y;
+      })
+      .on("drag", (event, person) => {
+        person.fx = event.x;
+        person.fy = event.y;
+      })
+      .on("end", (event, person) => {
+        if (!event.active) networkSimulation.alphaTarget(0);
+        person.fx = null;
+        person.fy = null;
+      })
+  );
+}
+
+function loadD3() {
+  if (d3Library) return Promise.resolve(d3Library);
+  if (!d3LoadPromise) {
+    d3LoadPromise = import("https://cdn.jsdelivr.net/npm/d3@7/+esm").then(
+      (module) => {
+        d3Library = module;
+        return module;
+      }
+    );
+  }
+  return d3LoadPromise;
+}
+
+function compactVnd(amount) {
+  const value = Number(amount) || 0;
+  if (value >= 1_000_000) {
+    return `${new Intl.NumberFormat("en", { maximumFractionDigits: 1 }).format(value / 1_000_000)}m`;
+  }
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return String(value);
 }
 
 // Positive amount = debtorId owes creditorId more because of this transaction.
 function pairDelta(tx, debtorId, creditorId) {
-  const amount = tx.amountVnd || 0;
-  const none = { amount: 0, note: "" };
-
-  if (tx.type === "LOAN") {
-    if (tx.fromId === creditorId && tx.toId === debtorId) {
-      return {
-        amount,
-        note: `${memberName(creditorId)} lent ${memberName(
-          debtorId
-        )} ${formatVnd(amount)}`,
-      };
-    }
-    if (tx.fromId === debtorId && tx.toId === creditorId) {
-      return {
-        amount: -amount,
-        note: `${memberName(debtorId)} lent ${memberName(
-          creditorId
-        )} ${formatVnd(amount)}, which cancels out debt`,
-      };
-    }
-    return none;
-  }
-
-  if (tx.type === "SETTLEMENT") {
-    if (tx.fromId === debtorId && tx.toId === creditorId) {
-      return {
-        amount: -amount,
-        note: `${memberName(debtorId)} paid back ${formatVnd(amount)}`,
-      };
-    }
-    if (tx.fromId === creditorId && tx.toId === debtorId) {
-      return {
-        amount,
-        note: `${memberName(creditorId)} paid back ${formatVnd(
-          amount
-        )}, which swings the debt the other way`,
-      };
-    }
-    return none;
-  }
-
-  if (tx.type === "EXPENSE") {
-    const shareOf = (memberId) => {
-      const part = (tx.participants || []).find(
-        (entry) => entry.memberId === memberId
-      );
-      return part ? part.shareVnd || 0 : 0;
-    };
-
-    if (tx.payerId === creditorId && debtorId !== creditorId) {
-      const share = shareOf(debtorId);
-      if (!share) return none;
-      return {
-        amount: share,
-        note: `${memberName(creditorId)} paid ${formatVnd(
-          amount
-        )} and ${memberName(debtorId)}'s share was ${formatVnd(share)}`,
-      };
-    }
-
-    if (tx.payerId === debtorId && debtorId !== creditorId) {
-      const share = shareOf(creditorId);
-      if (!share) return none;
-      return {
-        amount: -share,
-        note: `${memberName(debtorId)} paid ${formatVnd(
-          amount
-        )} and ${memberName(creditorId)}'s share was ${formatVnd(share)}`,
-      };
-    }
-
-    return none;
-  }
-
-  return none;
+  return ledgerCore.pairDelta(tx, debtorId, creditorId, {
+    members: state.members,
+    memberName,
+    formatAmount: formatVnd,
+  });
 }
 
 // Positive amount = memberId is owed more overall because of this transaction.
 function balanceDelta(tx, memberId) {
-  const amount = tx.amountVnd || 0;
-  const none = { amount: 0, note: "" };
-
-  if (tx.type === "LOAN") {
-    if (tx.fromId === memberId) {
-      return {
-        amount,
-        note: `Lent ${formatVnd(amount)} to ${memberName(tx.toId)}`,
-      };
-    }
-    if (tx.toId === memberId) {
-      return {
-        amount: -amount,
-        note: `Borrowed ${formatVnd(amount)} from ${memberName(tx.fromId)}`,
-      };
-    }
-    return none;
-  }
-
-  if (tx.type === "SETTLEMENT") {
-    if (tx.fromId === memberId) {
-      return {
-        amount,
-        note: `Paid ${formatVnd(amount)} to ${memberName(tx.toId)}`,
-      };
-    }
-    if (tx.toId === memberId) {
-      return {
-        amount: -amount,
-        note: `Received ${formatVnd(amount)} from ${memberName(tx.fromId)}`,
-      };
-    }
-    return none;
-  }
-
-  if (tx.type === "EXPENSE") {
-    const participants = tx.participants || [];
-
-    if (tx.payerId === memberId) {
-      const othersTotal = participants
-        .filter((part) => part.memberId !== memberId)
-        .reduce((sum, part) => sum + (part.shareVnd || 0), 0);
-      if (!othersTotal) return none;
-      const ownShare = participants.find(
-        (part) => part.memberId === memberId
-      );
-      const ownAmount = ownShare ? ownShare.shareVnd || 0 : 0;
-      return {
-        amount: othersTotal,
-        note: `Paid ${formatVnd(amount)}, own share ${formatVnd(
-          ownAmount
-        )}, so the others owe ${formatVnd(othersTotal)}`,
-      };
-    }
-
-    const own = participants.find((part) => part.memberId === memberId);
-    const share = own ? own.shareVnd || 0 : 0;
-    if (!share) return none;
-    return {
-      amount: -share,
-      note: `${memberName(tx.payerId)} paid ${formatVnd(
-        amount
-      )} and this share was ${formatVnd(share)}`,
-    };
-  }
-
-  return none;
+  return ledgerCore.balanceDelta(tx, memberId, {
+    members: state.members,
+    memberName,
+    formatAmount: formatVnd,
+  });
 }
 
 function buildContributions(deltaFor) {
-  const rows = [];
-  let running = 0;
-
-  activeTransactionsAsc().forEach((tx) => {
-    const delta = deltaFor(tx);
-    if (!delta.amount) return;
-    running += delta.amount;
-    rows.push({
-      txId: tx.id,
-      date: getEventDate(tx),
-      type: tx.type,
-      reason: tx.reason || "",
-      note: delta.note,
-      delta: delta.amount,
-      running,
-    });
-  });
-
-  return { rows, total: running };
+  return ledgerCore.buildContributions(state.transactions, deltaFor);
 }
 
-function renderBreakdownSteps(rows, positiveIsBad) {
+function renderBreakdownSteps(rows, positiveIsBad, runningLabel = null) {
   return rows
     .map((row) => {
       const increases = row.delta > 0;
@@ -1185,7 +1714,7 @@ function renderBreakdownSteps(rows, positiveIsBad) {
       const chipClass =
         row.type === "EXPENSE" ? "" : row.type === "LOAN" ? "loan" : "settlement";
       return `
-        <div class="breakdown-step clickable" data-open-tx="${escapeHtml(
+        <button class="breakdown-step" type="button" data-open-tx="${escapeHtml(
           row.txId
         )}">
           <div class="breakdown-step-main">
@@ -1198,15 +1727,23 @@ function renderBreakdownSteps(rows, positiveIsBad) {
           </div>
           <div class="breakdown-step-numbers">
             <div class="delta ${toneClass}">${formatSignedVnd(row.delta)}</div>
-            <div class="running">Running: ${formatSignedVnd(row.running)}</div>
+            <div class="running">After this: ${escapeHtml(
+              runningLabel ? runningLabel(row.running) : formatSignedVnd(row.running)
+            )}</div>
           </div>
-        </div>
+        </button>
       `;
     })
     .join("");
 }
 
 function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
+  state.breakdownContext = {
+    type: "pair",
+    debtorId,
+    creditorId,
+    fromMemberId,
+  };
   const { rows, total } = buildContributions((tx) =>
     pairDelta(tx, debtorId, creditorId)
   );
@@ -1243,7 +1780,11 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
     </div>
     ${
       rows.length
-        ? `<div class="breakdown-list">${renderBreakdownSteps(rows, true)}</div>`
+        ? `<div class="breakdown-list">${renderBreakdownSteps(
+            rows,
+            true,
+            (running) => pairStateText(debtorId, creditorId, running)
+          )}</div>`
         : "<p class='muted'>No shared transactions between these two yet.</p>"
     }
     <p class="muted">Click any entry above to open its full detail.</p>
@@ -1253,6 +1794,7 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
 }
 
 function openBalanceBreakdown(memberId) {
+  state.breakdownContext = { type: "member", memberId };
   const { rows, total } = buildContributions((tx) => balanceDelta(tx, memberId));
   const label = memberName(memberId);
 
@@ -1265,8 +1807,10 @@ function openBalanceBreakdown(memberId) {
     headline = `${label} is all square`;
   }
 
-  const validTx = state.transactions.filter((entry) => !entry.isDeleted);
-  const netEdges = netPairwise(buildEdges(validTx));
+  const { netEdges } = ledgerCore.buildLedgerSummary(
+    state.transactions,
+    state.members
+  );
   const counterparties = state.members
     .filter((member) => member.id !== memberId)
     .map((member) => {
@@ -1274,6 +1818,7 @@ function openBalanceBreakdown(memberId) {
       const owedByMember = netEdges.get(`${memberId}|${member.id}`) || 0;
       return { id: member.id, net: owedToMember - owedByMember };
     })
+    .filter((entry) => entry.net !== 0)
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
 
   el.breakdownTitle.textContent = `${label}'s net balance`;
@@ -1313,7 +1858,7 @@ function openBalanceBreakdown(memberId) {
                           )}`
                         : `Settled up with ${other}`;
                   return `
-                    <div class="ledger-item clickable" data-pair="${escapeHtml(
+                    <button class="ledger-item breakdown-counterparty" type="button" data-pair="${escapeHtml(
                       pair
                     )}" data-from-member="${escapeHtml(memberId)}">
                       <div class="flex items-center justify-between">
@@ -1324,8 +1869,8 @@ function openBalanceBreakdown(memberId) {
                     entry.net > 0 ? "receive" : entry.net < 0 ? "pay" : "even"
                   }</span>
                       </div>
-                      <div class="item-hint">Click to see this pair's entries</div>
-                    </div>
+                      <div class="item-hint">Open this relationship's entries</div>
+                    </button>
                   `;
                 })
                 .join("")
@@ -1337,7 +1882,11 @@ function openBalanceBreakdown(memberId) {
       <p class="label">Every entry, in order</p>
       ${
         rows.length
-          ? `<div class="breakdown-list">${renderBreakdownSteps(rows, false)}</div>`
+          ? `<div class="breakdown-list">${renderBreakdownSteps(
+              rows,
+              false,
+              (running) => memberStateText(memberId, running)
+            )}</div>`
           : "<p class='muted'>No transactions involve this member yet.</p>"
       }
     </div>
@@ -1347,10 +1896,61 @@ function openBalanceBreakdown(memberId) {
   openModal(el.breakdownModal);
 }
 
+function exportLedgerSnapshot() {
+  const exportedAt = new Date();
+  const snapshot = {
+    format: "solo-knight-ledger-export",
+    version: 1,
+    exportedAt: exportedAt.toISOString(),
+    group: {
+      id: APP_CONFIG.groupId,
+      name: APP_CONFIG.groupName,
+      timezone: APP_CONFIG.timezone,
+      members: state.members,
+    },
+    transactions: state.transactions,
+  };
+  const json = JSON.stringify(exportSafeValue(snapshot), null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const dateLabel = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_CONFIG.timezone,
+  }).format(exportedAt);
+  link.href = url;
+  link.download = `solo-knight-ledger-${dateLabel}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+
+  const previousLabel = el.exportLedger.textContent;
+  el.exportLedger.textContent = "Downloaded";
+  setTimeout(() => {
+    el.exportLedger.textContent = previousLabel;
+  }, 1800);
+}
+
+function exportSafeValue(value) {
+  if (value === null || value === undefined) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value?.toDate === "function") return value.toDate().toISOString();
+  if (Array.isArray(value)) return value.map(exportSafeValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, exportSafeValue(item)])
+    );
+  }
+  return value;
+}
+
 function renderLedger() {
   const typeFilter = el.ledgerTypeFilter.value;
   const memberFilter = el.ledgerMemberFilter.value;
-  const fromDate = el.ledgerFrom.value ? new Date(el.ledgerFrom.value) : null;
+  const search = el.ledgerSearch.value.trim().toLocaleLowerCase();
+  const fromDate = el.ledgerFrom.value
+    ? new Date(`${el.ledgerFrom.value}T00:00:00`)
+    : null;
   const toDate = el.ledgerTo.value
     ? new Date(`${el.ledgerTo.value}T23:59:59`)
     : null;
@@ -1362,6 +1962,24 @@ function renderLedger() {
       memberFilter === "ALL" ? true : transactionInvolves(entry, memberFilter)
     )
     .filter((entry) => {
+      if (!search) return true;
+      const description = describeTransaction(entry);
+      const people = transactionMemberIds(entry).map(memberName).join(" ");
+      return [
+        entry.reason,
+        entry.type,
+        entry.category,
+        categoryLabel(entry.category),
+        description.title,
+        description.detail,
+        people,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(search);
+    })
+    .filter((entry) => {
       const date = getEventDate(entry);
       if (!date) return true;
       if (fromDate && date < fromDate) return false;
@@ -1370,13 +1988,18 @@ function renderLedger() {
     })
     .sort((a, b) => (getEventDate(b) || 0) - (getEventDate(a) || 0));
 
+  const activeLabel = state.showDeleted ? "including deleted" : "active";
+  el.ledgerResultCount.textContent = `${filtered.length} ${
+    filtered.length === 1 ? "entry" : "entries"
+  } shown (${activeLabel})`;
+
   if (!filtered.length) {
-    el.ledgerList.innerHTML = "<p class='muted'>No transactions yet.</p>";
+    el.ledgerList.innerHTML = `<div class="empty-state"><strong>No matching entries</strong><span>Try a different person, type, date or search phrase.</span></div>`;
     return;
   }
 
   el.ledgerList.innerHTML = filtered
-    .map((entry) => renderLedgerItem(entry))
+    .map((entry) => renderActivityItem(entry))
     .join("");
 
   el.ledgerList.querySelectorAll("[data-tx-id]").forEach((item) => {
@@ -1384,61 +2007,141 @@ function renderLedger() {
   });
 }
 
-function renderLedgerItem(entry) {
+function renderActivityItem(entry, { compact = false } = {}) {
   const desc = describeTransaction(entry);
   const time = formatDateTime(getEventDate(entry));
-  const chipClass =
-    entry.type === "EXPENSE"
-      ? ""
-      : entry.type === "LOAN"
-        ? "loan"
-        : "settlement";
+  const impact = activityImpactFor(entry, state.currentMemberId);
+  const typeClass = String(entry.type || "entry").toLocaleLowerCase();
+  const marker = entry.type === "EXPENSE" ? "E" : entry.type === "LOAN" ? "L" : "P";
   const deleted = entry.isDeleted ? "deleted" : "";
+  const category = categoryLabel(entry.category);
+  const reason = entry.reason || (entry.type === "SETTLEMENT" ? "Payment recorded" : "No reason recorded");
 
   return `
-    <div class="ledger-item clickable ${deleted}" data-tx-id="${escapeHtml(entry.id)}">
-      <div class="flex items-center justify-between">
-        <strong>${escapeHtml(desc.title)}</strong>
-        <span class="chip ${chipClass}">${escapeHtml(entry.type)}</span>
-      </div>
-      ${
-        desc.reason
-          ? `<div class="ledger-reason">${escapeHtml(desc.reason)}</div>`
-          : ""
-      }
-      <div class="ledger-meta">${escapeHtml(desc.detail)}</div>
-      <div class="ledger-meta">${escapeHtml(time)}</div>
-    </div>
+    <button class="activity-row ${typeClass} ${deleted} ${compact ? "is-compact" : ""}" type="button" data-tx-id="${escapeHtml(entry.id)}">
+      <span class="activity-marker" aria-hidden="true">${marker}</span>
+      <span class="activity-main">
+        <strong class="activity-reason">${escapeHtml(reason)}</strong>
+        <span class="activity-description">${escapeHtml(desc.title.replace(/^\w+:\s*/, ""))}</span>
+        <span class="activity-meta">${escapeHtml(typeLabel(entry.type))}${category ? ` &middot; ${escapeHtml(category)}` : ""} &middot; ${escapeHtml(time)}${entry.isDeleted ? " &middot; Deleted" : ""}</span>
+      </span>
+      <span class="activity-impact ${impact.tone}">
+        <strong>${escapeHtml(impact.amount)}</strong>
+        <span>${escapeHtml(impact.label)}</span>
+      </span>
+    </button>
   `;
 }
 
+function activityImpactFor(entry, viewerId) {
+  const amount = Number(entry.amountVnd) || 0;
+  if (!viewerId || !transactionInvolves(entry, viewerId)) {
+    return { amount: formatVnd(amount), label: "Entry total", tone: "" };
+  }
+
+  if (entry.type === "LOAN") {
+    if (entry.fromId === viewerId) {
+      return { amount: formatVnd(amount), label: "You lent", tone: "positive" };
+    }
+    return { amount: formatVnd(amount), label: "You borrowed", tone: "negative" };
+  }
+
+  if (entry.type === "SETTLEMENT") {
+    if (entry.fromId === viewerId) {
+      return { amount: formatVnd(amount), label: "You paid", tone: "positive" };
+    }
+    return { amount: formatVnd(amount), label: "You received", tone: "positive" };
+  }
+
+  if (entry.type === "EXPENSE") {
+    if (entry.payerId === viewerId) {
+      const owedByOthers = (entry.participants || [])
+        .filter((participant) => participant.memberId !== viewerId)
+        .reduce((sum, participant) => sum + (Number(participant.shareVnd) || 0), 0);
+      return {
+        amount: formatVnd(owedByOthers),
+        label: owedByOthers ? "Others' shares" : "Only your share",
+        tone: owedByOthers ? "positive" : "",
+      };
+    }
+    const share = (entry.participants || []).find(
+      (participant) => participant.memberId === viewerId
+    );
+    return {
+      amount: formatVnd(Number(share?.shareVnd) || 0),
+      label: "Your share",
+      tone: "negative",
+    };
+  }
+
+  return { amount: formatVnd(amount), label: "Entry total", tone: "" };
+}
+
+function transactionMemberIds(entry) {
+  if (entry.type === "EXPENSE") {
+    return [...new Set([entry.payerId, ...(entry.participants || []).map((part) => part.memberId)])].filter(Boolean);
+  }
+  return [...new Set([entry.fromId, entry.toId])].filter(Boolean);
+}
+
+function typeLabel(type) {
+  return type === "EXPENSE" ? "Shared expense" : type === "LOAN" ? "Loan" : type === "SETTLEMENT" ? "Payment" : "Entry";
+}
+
+function categoryLabel(category) {
+  const labels = {
+    FOOD: "Food & drinks",
+    TRANSPORT: "Transport",
+    ENTERTAINMENT: "Entertainment",
+    SHOPPING: "Shopping",
+    STAY: "Stay",
+    OTHER: "Other",
+  };
+  return labels[category] || "";
+}
+
 function renderSettleUp() {
-  const validTx = state.transactions.filter((entry) => !entry.isDeleted);
-  const edges = buildEdges(validTx);
-  const netEdges = netPairwise(edges);
-  const balances = computeNetBalances(netEdges);
-  const suggestions = buildSettleSuggestions(balances);
+  const { balances, suggestions } = ledgerCore.buildLedgerSummary(
+    state.transactions,
+    state.members
+  );
+  const totalToMove = suggestions.reduce((sum, suggestion) => sum + suggestion.amount, 0);
+  const openPeople = Object.values(balances).filter((net) => net !== 0).length;
+
+  el.settleSummary.textContent = suggestions.length
+    ? `${suggestions.length} suggested ${suggestions.length === 1 ? "payment" : "payments"} move ${formatVnd(totalToMove)} and bring ${openPeople} open balances back to zero.`
+    : "Everyone is already settled. No payment needs to be recorded.";
 
   if (!suggestions.length) {
-    el.settleList.innerHTML = "<p class='muted'>Nothing to settle yet.</p>";
+    el.settleList.innerHTML = `<div class="empty-state"><strong>Nothing to settle</strong><span>Every active balance is currently zero.</span></div>`;
     return;
   }
 
   el.settleList.innerHTML = suggestions
     .map((suggestion) => {
+      const debtor = memberName(suggestion.debtor);
+      const creditor = memberName(suggestion.creditor);
+      const currentUser =
+        suggestion.debtor === state.currentMemberId ||
+        suggestion.creditor === state.currentMemberId;
       return `
-      <div class="ledger-item">
-        <div class="flex items-center justify-between">
-          <strong>${escapeHtml(memberName(suggestion.debtor))} pays ${escapeHtml(
-        memberName(suggestion.creditor)
-      )}</strong>
-          <span class="chip settlement">Settle</span>
+      <article class="settlement-row ${currentUser ? "current-user" : ""}">
+        <div class="settlement-flow">
+          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(debtor))}</span>
+          <span aria-hidden="true">&rarr;</span>
+          <span class="relationship-avatar" aria-hidden="true">${escapeHtml(memberInitials(creditor))}</span>
+          <span class="settlement-flow-copy">
+            <strong>${escapeHtml(debtor)} pays ${escapeHtml(creditor)}</strong>
+            <span>${currentUser ? "This payment involves you" : "Suggested from the group's net balances"}</span>
+          </span>
         </div>
-        <div class="ledger-meta">${formatVnd(suggestion.amount)}</div>
-        <button class="btn btn-ghost" data-settle="${escapeHtml(
-          suggestion.debtor
-        )}|${escapeHtml(suggestion.creditor)}|${suggestion.amount}">Record settlement</button>
-      </div>
+        <div class="settlement-action">
+          <strong>${formatVnd(suggestion.amount)}</strong>
+          <button class="btn btn-soft" type="button" data-settle="${escapeHtml(
+            suggestion.debtor
+          )}|${escapeHtml(suggestion.creditor)}|${suggestion.amount}">Record payment</button>
+        </div>
+      </article>
       `;
     })
     .join("");
@@ -1451,110 +2154,43 @@ function renderSettleUp() {
   });
 }
 
-function buildSettleSuggestions(balances) {
-  const debtors = [];
-  const creditors = [];
-  Object.entries(balances).forEach(([memberId, net]) => {
-    if (net < 0) {
-      debtors.push({ memberId, amount: Math.abs(net) });
-    } else if (net > 0) {
-      creditors.push({ memberId, amount: net });
-    }
-  });
-
-  debtors.sort((a, b) => b.amount - a.amount);
-  creditors.sort((a, b) => b.amount - a.amount);
-
-  const transfers = [];
-  let i = 0;
-  let j = 0;
-
-  while (i < debtors.length && j < creditors.length) {
-    const debtor = debtors[i];
-    const creditor = creditors[j];
-    const pay = Math.min(debtor.amount, creditor.amount);
-    transfers.push({ debtor: debtor.memberId, creditor: creditor.memberId, amount: pay });
-    debtor.amount -= pay;
-    creditor.amount -= pay;
-    if (debtor.amount === 0) i += 1;
-    if (creditor.amount === 0) j += 1;
-  }
-
-  return transfers;
-}
-
 function prefillSettlement(fromId, toId, amount) {
+  if (state.editingTxId) clearEdit();
   el.entryType.value = "SETTLEMENT";
   updateEntryType();
   el.settleFrom.value = fromId;
   el.settleTo.value = toId;
   el.amountVnd.value = amount;
   el.reason.value = "Settlement";
+  el.entryCategory.value = "";
   setEventAtValue(new Date());
-  scrollToId("entryPanel");
+  openEntryComposer();
 }
 
 // Returns plain text; callers are responsible for escaping before injecting HTML.
 function describeTransaction(entry) {
-  const amount = formatVnd(entry.amountVnd || 0);
-  const reason = entry.reason || "";
-
-  if (entry.type === "LOAN") {
-    return {
-      title: `Loan: ${memberName(entry.toId)} owes ${memberName(entry.fromId)}`,
-      reason,
-      detail: amount,
-    };
-  }
-
-  if (entry.type === "SETTLEMENT") {
-    return {
-      title: `Settlement: ${memberName(entry.fromId)} paid ${memberName(
-        entry.toId
-      )}`,
-      reason,
-      detail: amount,
-    };
-  }
-
-  if (entry.type === "EXPENSE") {
-    const participants = (entry.participants || [])
-      .map((part) => `${memberName(part.memberId)} ${formatVnd(part.shareVnd || 0)}`)
-      .join(" · ");
-    return {
-      title: `Expense: ${memberName(entry.payerId)} paid ${amount}`,
-      reason,
-      detail: `Split: ${participants}`,
-    };
-  }
-
-  return { title: "Transaction", reason, detail: "" };
+  return ledgerCore.describeTransaction(entry, {
+    members: state.members,
+    memberName,
+    formatAmount: formatVnd,
+  });
 }
 
 function transactionInvolves(entry, memberId) {
-  if (entry.type === "LOAN" || entry.type === "SETTLEMENT") {
-    return entry.fromId === memberId || entry.toId === memberId;
-  }
-
-  if (entry.type === "EXPENSE") {
-    if (entry.payerId === memberId) return true;
-    return (entry.participants || []).some(
-      (part) => part.memberId === memberId
-    );
-  }
-
-  return false;
+  return ledgerCore.transactionInvolves(entry, memberId);
 }
 
-function showEntryDetail(txId) {
+function showEntryDetail(txId, { returnToBreakdown = null } = {}) {
   const entry = state.transactions.find((tx) => tx.id === txId);
   if (!entry) return;
   state.selectedTxId = txId;
+  state.detailReturnBreakdown = returnToBreakdown;
 
   const desc = describeTransaction(entry);
   const impacts = computeImpacts(entry);
   const meta = [
     { label: "Type", value: entry.type },
+    { label: "Category", value: categoryLabel(entry.category) || "Uncategorized" },
     { label: "Amount", value: formatVnd(entry.amountVnd || 0) },
     { label: "Event time", value: formatDateTime(getEventDate(entry)) },
     { label: "Created by", value: memberName(entry.createdBy) },
@@ -1563,6 +2199,11 @@ function showEntryDetail(txId) {
 
   const detailHtml = `
     <div class="stack">
+      ${
+        entry.isDeleted
+          ? `<div class="deleted-banner" role="status"><strong>Deleted entry</strong><span>This entry is kept for reference but does not affect any current balance.</span></div>`
+          : ""
+      }
       <div>
         <h4 class="panel-title">${escapeHtml(desc.title)}</h4>
         <div class="ledger-reason reason-lead">${escapeHtml(
@@ -1583,7 +2224,7 @@ function showEntryDetail(txId) {
           .join("")}
       </div>
       <div>
-        <p class="label">Impacts</p>
+        <p class="label">Impact on the ledger</p>
         ${
           impacts.length
             ? impacts
@@ -1607,39 +2248,78 @@ function showEntryDetail(txId) {
   el.restoreEntry.classList.toggle("hidden", !entry.isDeleted);
   el.deleteEntry.classList.toggle("hidden", entry.isDeleted);
 
-  openModal(el.detailModal);
-  loadAudit(entry.id);
+  openModal(el.detailModal, el.closeDetail);
+  loadAudit(entry.id).catch((error) => {
+    console.error("Failed to load audit", error);
+    if (state.selectedTxId !== entry.id) return;
+    const audit = document.getElementById("auditLog");
+    if (audit) audit.innerHTML = "<p class='muted'>Audit history could not be loaded.</p>";
+  });
 }
 
 function computeImpacts(entry) {
-  if (entry.type === "LOAN") {
-    return [
-      {
-        label: `${memberName(entry.toId)} owes ${memberName(entry.fromId)}`,
-        note: formatVnd(entry.amountVnd || 0),
-      },
-    ];
-  }
-
   if (entry.type === "SETTLEMENT") {
+    const amount = Number(entry.amountVnd) || 0;
+    if (entry.isDeleted) {
+      return [
+        {
+          label: `${memberName(entry.fromId)} paid ${memberName(entry.toId)}`,
+          note: `${formatVnd(amount)} recorded, but this deleted entry has no current impact.`,
+        },
+      ];
+    }
+
+    const { rows } = buildContributions((transaction) =>
+      pairDelta(transaction, entry.fromId, entry.toId)
+    );
+    const row = rows.find((candidate) => candidate.txId === entry.id);
+    const before = row ? row.running - row.delta : 0;
+    const after = row ? row.running : before - amount;
+    let effect;
+    if (before > 0 && after > 0) {
+      effect = `Reduced ${memberName(entry.fromId)}'s debt from ${formatVnd(before)} to ${formatVnd(after)}.`;
+    } else if (before > 0 && after === 0) {
+      effect = `Cleared the full ${formatVnd(before)} debt between them.`;
+    } else if (before > 0 && after < 0) {
+      effect = `Cleared ${formatVnd(before)} and created ${formatVnd(Math.abs(after))} owed in the opposite direction.`;
+    } else if (after < 0) {
+      effect = `Moved the relationship to ${memberName(entry.toId)} owing ${memberName(entry.fromId)} ${formatVnd(Math.abs(after))}.`;
+    } else {
+      effect = `After this payment, ${pairStateText(entry.fromId, entry.toId, after)}.`;
+    }
     return [
       {
-        label: `${memberName(entry.fromId)} paid ${memberName(entry.toId)}`,
-        note: `Reduces debt by ${formatVnd(entry.amountVnd || 0)}`,
+        label: `${memberName(entry.fromId)} paid ${memberName(entry.toId)} ${formatVnd(amount)}`,
+        note: effect,
       },
     ];
   }
 
-  if (entry.type === "EXPENSE") {
-    return (entry.participants || [])
-      .filter((part) => part.memberId !== entry.payerId)
-      .map((part) => ({
-        label: `${memberName(part.memberId)} owes ${memberName(entry.payerId)}`,
-        note: formatVnd(part.shareVnd || 0),
-      }));
-  }
+  return ledgerCore.computeImpacts(entry, {
+    members: state.members,
+    memberName,
+    formatAmount: formatVnd,
+  });
+}
 
-  return [];
+function pairStateText(debtorId, creditorId, balance) {
+  if (balance > 0) {
+    return `${memberName(debtorId)} owed ${memberName(creditorId)} ${formatVnd(balance)}`;
+  }
+  if (balance < 0) {
+    return `${memberName(creditorId)} owed ${memberName(debtorId)} ${formatVnd(Math.abs(balance))}`;
+  }
+  return `${memberName(debtorId)} and ${memberName(creditorId)} were settled`;
+}
+
+function memberStateText(memberId, balance) {
+  if (balance > 0) {
+    return `${memberName(memberId)} should receive ${formatVnd(balance)} overall`;
+  }
+  if (balance < 0) {
+    return `${memberName(memberId)} should pay ${formatVnd(Math.abs(balance))} overall`;
+  }
+  return `${memberName(memberId)} was all square`;
 }
 
 async function loadAudit(txId) {
@@ -1653,6 +2333,7 @@ async function loadAudit(txId) {
   );
   const auditQuery = query(auditCol, orderBy("at", "desc"));
   const snapshot = await getDocs(auditQuery);
+  if (state.selectedTxId !== txId) return;
 
   const entries = snapshot.docs.map((docSnap) => ({
     id: docSnap.id,
@@ -1701,6 +2382,7 @@ function startEditSelected() {
   updateEntryType();
   el.amountVnd.value = entry.amountVnd || "";
   el.reason.value = entry.reason || "";
+  el.entryCategory.value = entry.category || "";
   setEventAtValue(getEventDate(entry), true);
 
   if (entry.type === "LOAN") {
@@ -1735,8 +2417,8 @@ function startEditSelected() {
   el.entryModeNote.textContent = `Editing ${entry.type} entry.`;
   el.cancelEdit.classList.remove("hidden");
   el.submitEntry.textContent = "Update Entry";
-  closeModal(el.detailModal);
-  scrollToId("entryPanel");
+  closeModal(el.detailModal, { restoreBreakdown: false });
+  openEntryComposer();
 }
 
 function clearEdit() {
@@ -1783,7 +2465,7 @@ async function softDeleteSelected() {
     },
   });
 
-  closeModal(el.detailModal);
+  closeModal(el.detailModal, { restoreBreakdown: false });
 }
 
 async function restoreSelected() {
@@ -1813,7 +2495,7 @@ async function restoreSelected() {
     },
   });
 
-  closeModal(el.detailModal);
+  closeModal(el.detailModal, { restoreBreakdown: false });
 }
 
 function setIdentityLock(locked) {
@@ -1830,6 +2512,7 @@ function refreshEventTimeIfAuto() {
 function toggleEventPicker() {
   if (!el.eventAtPicker.classList.contains("hidden")) {
     el.eventAtPicker.classList.add("hidden");
+    el.eventAtPickerBtn.focus();
     return;
   }
   el.eventAtPicker.classList.remove("hidden");
@@ -1868,14 +2551,72 @@ function toPickerInputValue(date) {
   )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function openModal(modal) {
+function openModal(modal, initialFocus = null) {
+  if (!modal) return;
+  if (!modal.classList.contains("hidden")) {
+    (initialFocus || modal.querySelector("button, input, select, textarea"))?.focus();
+    return;
+  }
+  document.querySelectorAll(".modal:not(.hidden)").forEach((open) => {
+    open.setAttribute("aria-hidden", "true");
+  });
+  state.modalFocusStack.push({ modal, opener: document.activeElement });
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  requestAnimationFrame(() => {
+    const target =
+      initialFocus ||
+      modal.querySelector(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      );
+    target?.focus();
+  });
 }
 
-function closeModal(modal) {
+function closeModal(modal, { restoreBreakdown = true } = {}) {
+  if (!modal || modal.classList.contains("hidden")) return;
+  if (modal === el.entryModal && state.editingTxId) clearEdit();
   modal.classList.add("hidden");
   modal.setAttribute("aria-hidden", "true");
+  const stackIndex = state.modalFocusStack
+    .map((entry) => entry.modal)
+    .lastIndexOf(modal);
+  const [closed] = stackIndex >= 0
+    ? state.modalFocusStack.splice(stackIndex, 1)
+    : [];
+  if (!document.querySelector(".modal:not(.hidden)")) {
+    document.body.classList.remove("modal-open");
+  } else {
+    const remaining = [...document.querySelectorAll(".modal:not(.hidden)")].at(-1);
+    remaining?.setAttribute("aria-hidden", "false");
+  }
+  const restoreTarget = closed?.opener;
+  if (restoreTarget && restoreTarget.isConnected && !restoreTarget.closest("[aria-hidden='true']")) {
+    requestAnimationFrame(() => restoreTarget.focus());
+  }
+  if (modal === el.detailModal) {
+    const context = state.detailReturnBreakdown;
+    state.detailReturnBreakdown = null;
+    if (restoreBreakdown && context) {
+      requestAnimationFrame(() => reopenBreakdown(context));
+    }
+  }
+  if (modal === el.breakdownModal && !state.detailReturnBreakdown) {
+    state.breakdownContext = null;
+  }
+}
+
+function reopenBreakdown(context) {
+  if (context.type === "pair") {
+    openPairwiseBreakdown(
+      context.debtorId,
+      context.creditorId,
+      context.fromMemberId || null
+    );
+  } else if (context.type === "member") {
+    openBalanceBreakdown(context.memberId);
+  }
 }
 
 function showFormError(message) {
@@ -1888,22 +2629,12 @@ function clearFormError() {
   el.formError.classList.add("hidden");
 }
 
-function scrollToId(id) {
-  const target = document.getElementById(id);
-  if (target) {
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-}
-
 function formatVnd(amount) {
-  if (!Number.isFinite(amount)) return "0 VND";
-  return `${new Intl.NumberFormat("vi-VN").format(amount)} VND`;
+  return ledgerCore.formatVnd(Number(amount));
 }
 
 function formatSignedVnd(amount) {
-  if (!Number.isFinite(amount) || amount === 0) return "0 VND";
-  const sign = amount > 0 ? "+" : "−";
-  return `${sign}${formatVnd(Math.abs(amount))}`;
+  return ledgerCore.formatSignedVnd(Number(amount));
 }
 
 const HTML_ESCAPES = {
@@ -1924,44 +2655,36 @@ function memberName(memberId) {
   return member ? member.displayName : memberId || "Unknown";
 }
 
+function memberInitials(displayName) {
+  return (
+    String(displayName || "?")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toLocaleUpperCase() || "")
+      .join("") || "?"
+  );
+}
+
 function toDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-  if (typeof value.toDate === "function") return value.toDate();
-  return new Date(value);
+  return ledgerCore.toDate(value);
 }
 
 function getEventDate(entry) {
-  return toDate(entry.eventAt) || toDate(entry.createdAt);
+  return ledgerCore.getEventDate(entry);
 }
 
 function formatDateTime(date) {
-  if (!date) return "";
-  return new Intl.DateTimeFormat("vi-VN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return ledgerCore.formatDateTime(date, { timeZone: APP_CONFIG.timezone });
 }
 
 function toLocalInputValue(date) {
-  if (!date) return "";
-  const pad = (num) => String(num).padStart(2, "0");
-  return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(
-    date.getHours()
-  )}:${pad(date.getMinutes())}`;
+  return ledgerCore.toLocalInputValue(date);
 }
 
 function formatJson(value) {
-  return JSON.stringify(
-    value,
-    (key, val) => {
-      if (val && typeof val.toDate === "function") {
-        return val.toDate().toISOString();
-      }
-      return val;
-    },
-    2
-  );
+  return ledgerCore.formatJson(value);
 }
 
 updateEntryType();
