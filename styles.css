@@ -329,6 +329,54 @@ body {
   text-decoration: line-through;
 }
 
+.clickable {
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease,
+    border-color 0.18s ease, background 0.18s ease;
+}
+
+.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-soft);
+  border-color: rgba(228, 87, 46, 0.35);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.section-hint {
+  font-size: 12px;
+  color: #8a7f6c;
+  margin: -4px 0 10px;
+}
+
+.item-hint {
+  font-size: 12px;
+  color: #8a7f6c;
+}
+
+.ledger-reason {
+  align-self: flex-start;
+  max-width: 100%;
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.35;
+  color: #8a2f16;
+  background: rgba(228, 87, 46, 0.1);
+  border: 1px solid rgba(228, 87, 46, 0.2);
+  border-radius: 10px;
+  padding: 5px 10px;
+  word-break: break-word;
+}
+
+.ledger-item.deleted .ledger-reason {
+  text-decoration: line-through;
+}
+
+.reason-lead {
+  display: block;
+  margin: 8px 0;
+  font-size: 17px;
+}
+
 .ledger-meta {
   display: flex;
   flex-wrap: wrap;
@@ -370,6 +418,8 @@ body {
   box-shadow: var(--shadow);
   padding: 20px;
   width: min(480px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 .modal-wide {
@@ -417,6 +467,79 @@ body {
   border: 1px solid rgba(26, 24, 18, 0.08);
 }
 
+.breakdown-summary {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(15, 124, 123, 0.08);
+  border: 1px solid rgba(15, 124, 123, 0.18);
+}
+
+.breakdown-total {
+  font-family: "Fraunces", "Georgia", serif;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 4px 0 6px;
+}
+
+.back-btn {
+  align-self: flex-start;
+}
+
+.breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 2px 4px 2px 2px;
+}
+
+.breakdown-step {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(26, 24, 18, 0.1);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.breakdown-step-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.breakdown-step-main .ledger-meta {
+  gap: 6px;
+}
+
+.breakdown-step-numbers {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.delta {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.delta.up {
+  color: #8a2f16;
+}
+
+.delta.down {
+  color: #0f7c7b;
+}
+
+.running {
+  font-size: 12px;
+  color: #6b6254;
+  margin-top: 2px;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -440,6 +563,14 @@ body {
 
   .participant-row {
     grid-template-columns: 1fr 120px 80px;
+  }
+
+  .breakdown-step {
+    grid-template-columns: 1fr;
+  }
+
+  .breakdown-step-numbers {
+    text-align: left;
   }
 }
 

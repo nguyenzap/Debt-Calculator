@@ -68,10 +68,12 @@
           <div class="panel-body grid lg:grid-cols-2 gap-6">
             <div>
               <h3 class="section-title">Net balances</h3>
+              <p class="section-hint">Click a person to see how the total built up.</p>
               <div id="netBalances" class="stack"></div>
             </div>
             <div>
               <h3 class="section-title">Pairwise debts</h3>
+              <p class="section-hint">Click a debt to see every entry behind it.</p>
               <div id="pairwiseList" class="stack"></div>
             </div>
           </div>
@@ -279,6 +281,16 @@
           <button class="btn btn-ghost" id="restoreEntry">Restore</button>
           <button class="btn btn-danger" id="deleteEntry">Soft delete</button>
         </div>
+      </div>
+    </div>
+
+    <div id="breakdownModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card modal-wide">
+        <div class="modal-header">
+          <h3 id="breakdownTitle">Breakdown</h3>
+          <button class="icon-btn" id="closeBreakdown">Close</button>
+        </div>
+        <div id="breakdownBody" class="stack"></div>
       </div>
     </div>
 

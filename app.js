@@ -112,6 +112,10 @@ const el = {
   editEntry: document.getElementById("editEntry"),
   deleteEntry: document.getElementById("deleteEntry"),
   restoreEntry: document.getElementById("restoreEntry"),
+  breakdownModal: document.getElementById("breakdownModal"),
+  breakdownTitle: document.getElementById("breakdownTitle"),
+  breakdownBody: document.getElementById("breakdownBody"),
+  closeBreakdown: document.getElementById("closeBreakdown"),
 };
 
 let db = null;
@@ -246,6 +250,41 @@ function wireEvents() {
   el.editEntry.addEventListener("click", startEditSelected);
   el.deleteEntry.addEventListener("click", () => softDeleteSelected());
   el.restoreEntry.addEventListener("click", () => restoreSelected());
+
+  el.netBalances.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-balance-member]");
+    if (!item) return;
+    openBalanceBreakdown(item.dataset.balanceMember);
+  });
+
+  el.pairwiseList.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-pair]");
+    if (!item) return;
+    const [debtorId, creditorId] = item.dataset.pair.split("|");
+    openPairwiseBreakdown(debtorId, creditorId);
+  });
+
+  el.closeBreakdown.addEventListener("click", () => closeModal(el.breakdownModal));
+  el.breakdownBody.addEventListener("click", (event) => {
+    const backEl = event.target.closest("[data-back-member]");
+    if (backEl) {
+      openBalanceBreakdown(backEl.dataset.backMember);
+      return;
+    }
+
+    const pairEl = event.target.closest("[data-pair]");
+    if (pairEl) {
+      const [debtorId, creditorId] = pairEl.dataset.pair.split("|");
+      openPairwiseBreakdown(debtorId, creditorId, pairEl.dataset.fromMember || null);
+      return;
+    }
+
+    const txEl = event.target.closest("[data-open-tx]");
+    if (txEl) {
+      closeModal(el.breakdownModal);
+      showEntryDetail(txEl.dataset.openTx);
+    }
+  });
 }
 
 function startFirebase() {
@@ -391,7 +430,12 @@ function hideIdentityError() {
 
 function updateMemberSelects() {
   const options = state.members
-    .map((member) => `<option value="${member.id}">${member.displayName}</option>`)
+    .map(
+      (member) =>
+        `<option value="${escapeHtml(member.id)}">${escapeHtml(
+          member.displayName
+        )}</option>`
+    )
     .join("");
 
   el.loanFrom.innerHTML = options;
@@ -404,7 +448,10 @@ function updateMemberSelects() {
   const ledgerOptions = [
     '<option value="ALL">All</option>',
     ...state.members.map(
-      (member) => `<option value="${member.id}">${member.displayName}</option>`
+      (member) =>
+        `<option value="${escapeHtml(member.id)}">${escapeHtml(
+          member.displayName
+        )}</option>`
     ),
   ].join("");
   el.ledgerMemberFilter.innerHTML = ledgerOptions;
@@ -445,11 +492,11 @@ function renderParticipants() {
           <div class="participant-name">
             <input
               type="checkbox"
-              data-member-id="${entry.memberId}"
+              data-member-id="${escapeHtml(entry.memberId)}"
               ${entry.include ? "checked" : ""}
               ${isPayer ? "disabled" : ""}
             />
-            <span>${member}${isPayer ? " (payer)" : ""}</span>
+            <span>${escapeHtml(member)}${isPayer ? " (payer)" : ""}</span>
           </div>
           <input
             type="number"
@@ -898,16 +945,17 @@ function renderNetBalances(balances) {
 
   return entries
     .map(([memberId, net]) => {
-      const label = memberName(memberId);
+      const label = escapeHtml(memberName(memberId));
       const direction = net >= 0 ? "receive" : "pay";
       const amount = formatVnd(Math.abs(net));
       return `
-        <div class="ledger-item">
+        <div class="ledger-item clickable" data-balance-member="${escapeHtml(memberId)}">
           <div class="flex items-center justify-between">
             <strong>${label}</strong>
             <span class="chip ${net >= 0 ? "" : "settlement"}">${direction}</span>
           </div>
           <div class="ledger-meta">${amount}</div>
+          <div class="item-hint">Click to see the accumulation</div>
         </div>
       `;
     })
@@ -933,18 +981,370 @@ function renderPairwise(netEdges) {
     .sort((a, b) => b.amount - a.amount)
     .map((item) => {
       return `
-        <div class="ledger-item">
+        <div class="ledger-item clickable" data-pair="${escapeHtml(
+          item.debtor
+        )}|${escapeHtml(item.creditor)}">
           <div class="flex items-center justify-between">
-            <strong>${memberName(item.debtor)} owes ${memberName(
-        item.creditor
+            <strong>${escapeHtml(memberName(item.debtor))} owes ${escapeHtml(
+        memberName(item.creditor)
       )}</strong>
             <span class="chip loan">Debt</span>
           </div>
           <div class="ledger-meta">${formatVnd(item.amount)}</div>
+          <div class="item-hint">Click to see the accumulation</div>
         </div>
       `;
     })
     .join("");
+}
+
+function activeTransactionsAsc() {
+  return state.transactions
+    .filter((entry) => !entry.isDeleted)
+    .slice()
+    .sort((a, b) => (getEventDate(a) || 0) - (getEventDate(b) || 0));
+}
+
+// Positive amount = debtorId owes creditorId more because of this transaction.
+function pairDelta(tx, debtorId, creditorId) {
+  const amount = tx.amountVnd || 0;
+  const none = { amount: 0, note: "" };
+
+  if (tx.type === "LOAN") {
+    if (tx.fromId === creditorId && tx.toId === debtorId) {
+      return {
+        amount,
+        note: `${memberName(creditorId)} lent ${memberName(
+          debtorId
+        )} ${formatVnd(amount)}`,
+      };
+    }
+    if (tx.fromId === debtorId && tx.toId === creditorId) {
+      return {
+        amount: -amount,
+        note: `${memberName(debtorId)} lent ${memberName(
+          creditorId
+        )} ${formatVnd(amount)}, which cancels out debt`,
+      };
+    }
+    return none;
+  }
+
+  if (tx.type === "SETTLEMENT") {
+    if (tx.fromId === debtorId && tx.toId === creditorId) {
+      return {
+        amount: -amount,
+        note: `${memberName(debtorId)} paid back ${formatVnd(amount)}`,
+      };
+    }
+    if (tx.fromId === creditorId && tx.toId === debtorId) {
+      return {
+        amount,
+        note: `${memberName(creditorId)} paid back ${formatVnd(
+          amount
+        )}, which swings the debt the other way`,
+      };
+    }
+    return none;
+  }
+
+  if (tx.type === "EXPENSE") {
+    const shareOf = (memberId) => {
+      const part = (tx.participants || []).find(
+        (entry) => entry.memberId === memberId
+      );
+      return part ? part.shareVnd || 0 : 0;
+    };
+
+    if (tx.payerId === creditorId && debtorId !== creditorId) {
+      const share = shareOf(debtorId);
+      if (!share) return none;
+      return {
+        amount: share,
+        note: `${memberName(creditorId)} paid ${formatVnd(
+          amount
+        )} and ${memberName(debtorId)}'s share was ${formatVnd(share)}`,
+      };
+    }
+
+    if (tx.payerId === debtorId && debtorId !== creditorId) {
+      const share = shareOf(creditorId);
+      if (!share) return none;
+      return {
+        amount: -share,
+        note: `${memberName(debtorId)} paid ${formatVnd(
+          amount
+        )} and ${memberName(creditorId)}'s share was ${formatVnd(share)}`,
+      };
+    }
+
+    return none;
+  }
+
+  return none;
+}
+
+// Positive amount = memberId is owed more overall because of this transaction.
+function balanceDelta(tx, memberId) {
+  const amount = tx.amountVnd || 0;
+  const none = { amount: 0, note: "" };
+
+  if (tx.type === "LOAN") {
+    if (tx.fromId === memberId) {
+      return {
+        amount,
+        note: `Lent ${formatVnd(amount)} to ${memberName(tx.toId)}`,
+      };
+    }
+    if (tx.toId === memberId) {
+      return {
+        amount: -amount,
+        note: `Borrowed ${formatVnd(amount)} from ${memberName(tx.fromId)}`,
+      };
+    }
+    return none;
+  }
+
+  if (tx.type === "SETTLEMENT") {
+    if (tx.fromId === memberId) {
+      return {
+        amount,
+        note: `Paid ${formatVnd(amount)} to ${memberName(tx.toId)}`,
+      };
+    }
+    if (tx.toId === memberId) {
+      return {
+        amount: -amount,
+        note: `Received ${formatVnd(amount)} from ${memberName(tx.fromId)}`,
+      };
+    }
+    return none;
+  }
+
+  if (tx.type === "EXPENSE") {
+    const participants = tx.participants || [];
+
+    if (tx.payerId === memberId) {
+      const othersTotal = participants
+        .filter((part) => part.memberId !== memberId)
+        .reduce((sum, part) => sum + (part.shareVnd || 0), 0);
+      if (!othersTotal) return none;
+      const ownShare = participants.find(
+        (part) => part.memberId === memberId
+      );
+      const ownAmount = ownShare ? ownShare.shareVnd || 0 : 0;
+      return {
+        amount: othersTotal,
+        note: `Paid ${formatVnd(amount)}, own share ${formatVnd(
+          ownAmount
+        )}, so the others owe ${formatVnd(othersTotal)}`,
+      };
+    }
+
+    const own = participants.find((part) => part.memberId === memberId);
+    const share = own ? own.shareVnd || 0 : 0;
+    if (!share) return none;
+    return {
+      amount: -share,
+      note: `${memberName(tx.payerId)} paid ${formatVnd(
+        amount
+      )} and this share was ${formatVnd(share)}`,
+    };
+  }
+
+  return none;
+}
+
+function buildContributions(deltaFor) {
+  const rows = [];
+  let running = 0;
+
+  activeTransactionsAsc().forEach((tx) => {
+    const delta = deltaFor(tx);
+    if (!delta.amount) return;
+    running += delta.amount;
+    rows.push({
+      txId: tx.id,
+      date: getEventDate(tx),
+      type: tx.type,
+      reason: tx.reason || "",
+      note: delta.note,
+      delta: delta.amount,
+      running,
+    });
+  });
+
+  return { rows, total: running };
+}
+
+function renderBreakdownSteps(rows, positiveIsBad) {
+  return rows
+    .map((row) => {
+      const increases = row.delta > 0;
+      const toneClass = increases === positiveIsBad ? "up" : "down";
+      const chipClass =
+        row.type === "EXPENSE" ? "" : row.type === "LOAN" ? "loan" : "settlement";
+      return `
+        <div class="breakdown-step clickable" data-open-tx="${escapeHtml(
+          row.txId
+        )}">
+          <div class="breakdown-step-main">
+            <div class="ledger-reason">${escapeHtml(row.reason || "No reason given")}</div>
+            <div class="ledger-meta">${escapeHtml(row.note)}</div>
+            <div class="ledger-meta">
+              <span class="chip ${chipClass}">${escapeHtml(row.type)}</span>
+              <span>${escapeHtml(formatDateTime(row.date))}</span>
+            </div>
+          </div>
+          <div class="breakdown-step-numbers">
+            <div class="delta ${toneClass}">${formatSignedVnd(row.delta)}</div>
+            <div class="running">Running: ${formatSignedVnd(row.running)}</div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
+  const { rows, total } = buildContributions((tx) =>
+    pairDelta(tx, debtorId, creditorId)
+  );
+
+  const debtor = memberName(debtorId);
+  const creditor = memberName(creditorId);
+  let headline;
+  if (total > 0) {
+    headline = `${debtor} owes ${creditor} ${formatVnd(total)}`;
+  } else if (total < 0) {
+    headline = `${creditor} owes ${debtor} ${formatVnd(Math.abs(total))}`;
+  } else {
+    headline = `${debtor} and ${creditor} are settled up`;
+  }
+
+  el.breakdownTitle.textContent = `${debtor} and ${creditor}`;
+  el.breakdownBody.innerHTML = `
+    ${
+      fromMemberId
+        ? `<button type="button" class="icon-btn back-btn" data-back-member="${escapeHtml(
+            fromMemberId
+          )}">&larr; Back to ${escapeHtml(memberName(fromMemberId))}</button>`
+        : ""
+    }
+    <div class="breakdown-summary">
+      <p class="label">Result</p>
+      <p class="breakdown-total">${escapeHtml(headline)}</p>
+      <p class="muted">
+        ${rows.length} ${rows.length === 1 ? "entry" : "entries"} between them, oldest first.
+        Amounts marked <span class="delta up">+</span> grow what ${escapeHtml(
+          debtor
+        )} owes, <span class="delta down">&minus;</span> shrinks it.
+      </p>
+    </div>
+    ${
+      rows.length
+        ? `<div class="breakdown-list">${renderBreakdownSteps(rows, true)}</div>`
+        : "<p class='muted'>No shared transactions between these two yet.</p>"
+    }
+    <p class="muted">Click any entry above to open its full detail.</p>
+  `;
+
+  openModal(el.breakdownModal);
+}
+
+function openBalanceBreakdown(memberId) {
+  const { rows, total } = buildContributions((tx) => balanceDelta(tx, memberId));
+  const label = memberName(memberId);
+
+  let headline;
+  if (total > 0) {
+    headline = `${label} should receive ${formatVnd(total)}`;
+  } else if (total < 0) {
+    headline = `${label} should pay ${formatVnd(Math.abs(total))}`;
+  } else {
+    headline = `${label} is all square`;
+  }
+
+  const validTx = state.transactions.filter((entry) => !entry.isDeleted);
+  const netEdges = netPairwise(buildEdges(validTx));
+  const counterparties = state.members
+    .filter((member) => member.id !== memberId)
+    .map((member) => {
+      const owedToMember = netEdges.get(`${member.id}|${memberId}`) || 0;
+      const owedByMember = netEdges.get(`${memberId}|${member.id}`) || 0;
+      return { id: member.id, net: owedToMember - owedByMember };
+    })
+    .sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+
+  el.breakdownTitle.textContent = `${label}'s net balance`;
+  el.breakdownBody.innerHTML = `
+    <div class="breakdown-summary">
+      <p class="label">Result</p>
+      <p class="breakdown-total">${escapeHtml(headline)}</p>
+      <p class="muted">
+        ${rows.length} ${rows.length === 1 ? "entry" : "entries"} affect ${escapeHtml(
+    label
+  )}, oldest first.
+        <span class="delta down">+</span> means money owed to ${escapeHtml(
+          label
+        )}, <span class="delta up">&minus;</span> means money ${escapeHtml(
+    label
+  )} owes.
+      </p>
+    </div>
+    <div>
+      <p class="label">Split by person</p>
+      <div class="stack">
+        ${
+          counterparties.length
+            ? counterparties
+                .map((entry) => {
+                  const other = escapeHtml(memberName(entry.id));
+                  const pair =
+                    entry.net >= 0
+                      ? `${entry.id}|${memberId}`
+                      : `${memberId}|${entry.id}`;
+                  const text =
+                    entry.net > 0
+                      ? `${other} owes ${escapeHtml(label)} ${formatVnd(entry.net)}`
+                      : entry.net < 0
+                        ? `${escapeHtml(label)} owes ${other} ${formatVnd(
+                            Math.abs(entry.net)
+                          )}`
+                        : `Settled up with ${other}`;
+                  return `
+                    <div class="ledger-item clickable" data-pair="${escapeHtml(
+                      pair
+                    )}" data-from-member="${escapeHtml(memberId)}">
+                      <div class="flex items-center justify-between">
+                        <strong>${text}</strong>
+                        <span class="chip ${
+                          entry.net > 0 ? "" : entry.net < 0 ? "loan" : "settlement"
+                        }">${
+                    entry.net > 0 ? "receive" : entry.net < 0 ? "pay" : "even"
+                  }</span>
+                      </div>
+                      <div class="item-hint">Click to see this pair's entries</div>
+                    </div>
+                  `;
+                })
+                .join("")
+            : "<p class='muted'>No other members.</p>"
+        }
+      </div>
+    </div>
+    <div>
+      <p class="label">Every entry, in order</p>
+      ${
+        rows.length
+          ? `<div class="breakdown-list">${renderBreakdownSteps(rows, false)}</div>`
+          : "<p class='muted'>No transactions involve this member yet.</p>"
+      }
+    </div>
+    <p class="muted">Click any entry above to open its full detail.</p>
+  `;
+
+  openModal(el.breakdownModal);
 }
 
 function renderLedger() {
@@ -979,7 +1379,7 @@ function renderLedger() {
     .map((entry) => renderLedgerItem(entry))
     .join("");
 
-  document.querySelectorAll("[data-tx-id]").forEach((item) => {
+  el.ledgerList.querySelectorAll("[data-tx-id]").forEach((item) => {
     item.addEventListener("click", () => showEntryDetail(item.dataset.txId));
   });
 }
@@ -996,13 +1396,18 @@ function renderLedgerItem(entry) {
   const deleted = entry.isDeleted ? "deleted" : "";
 
   return `
-    <div class="ledger-item ${deleted}" data-tx-id="${entry.id}">
+    <div class="ledger-item clickable ${deleted}" data-tx-id="${escapeHtml(entry.id)}">
       <div class="flex items-center justify-between">
-        <strong>${desc.title}</strong>
-        <span class="chip ${chipClass}">${entry.type}</span>
+        <strong>${escapeHtml(desc.title)}</strong>
+        <span class="chip ${chipClass}">${escapeHtml(entry.type)}</span>
       </div>
-      <div class="ledger-meta">${desc.detail}</div>
-      <div class="ledger-meta">${time}</div>
+      ${
+        desc.reason
+          ? `<div class="ledger-reason">${escapeHtml(desc.reason)}</div>`
+          : ""
+      }
+      <div class="ledger-meta">${escapeHtml(desc.detail)}</div>
+      <div class="ledger-meta">${escapeHtml(time)}</div>
     </div>
   `;
 }
@@ -1024,21 +1429,21 @@ function renderSettleUp() {
       return `
       <div class="ledger-item">
         <div class="flex items-center justify-between">
-          <strong>${memberName(suggestion.debtor)} pays ${memberName(
-        suggestion.creditor
+          <strong>${escapeHtml(memberName(suggestion.debtor))} pays ${escapeHtml(
+        memberName(suggestion.creditor)
       )}</strong>
           <span class="chip settlement">Settle</span>
         </div>
         <div class="ledger-meta">${formatVnd(suggestion.amount)}</div>
-        <button class="btn btn-ghost" data-settle="${suggestion.debtor}|${
-        suggestion.creditor
-      }|${suggestion.amount}">Record settlement</button>
+        <button class="btn btn-ghost" data-settle="${escapeHtml(
+          suggestion.debtor
+        )}|${escapeHtml(suggestion.creditor)}|${suggestion.amount}">Record settlement</button>
       </div>
       `;
     })
     .join("");
 
-  document.querySelectorAll("[data-settle]").forEach((btn) => {
+  el.settleList.querySelectorAll("[data-settle]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const [fromId, toId, amount] = btn.dataset.settle.split("|");
       prefillSettlement(fromId, toId, parseInt(amount, 10));
@@ -1089,13 +1494,16 @@ function prefillSettlement(fromId, toId, amount) {
   scrollToId("entryPanel");
 }
 
+// Returns plain text; callers are responsible for escaping before injecting HTML.
 function describeTransaction(entry) {
   const amount = formatVnd(entry.amountVnd || 0);
+  const reason = entry.reason || "";
 
   if (entry.type === "LOAN") {
     return {
       title: `Loan: ${memberName(entry.toId)} owes ${memberName(entry.fromId)}`,
-      detail: `${amount} for ${entry.reason}`,
+      reason,
+      detail: amount,
     };
   }
 
@@ -1104,21 +1512,23 @@ function describeTransaction(entry) {
       title: `Settlement: ${memberName(entry.fromId)} paid ${memberName(
         entry.toId
       )}`,
-      detail: `${amount} ${entry.reason ? `(${entry.reason})` : ""}`.trim(),
+      reason,
+      detail: amount,
     };
   }
 
   if (entry.type === "EXPENSE") {
     const participants = (entry.participants || [])
-      .map((part) => memberName(part.memberId))
-      .join(", ");
+      .map((part) => `${memberName(part.memberId)} ${formatVnd(part.shareVnd || 0)}`)
+      .join(" · ");
     return {
       title: `Expense: ${memberName(entry.payerId)} paid ${amount}`,
-      detail: `${entry.reason} | Split: ${participants}`,
+      reason,
+      detail: `Split: ${participants}`,
     };
   }
 
-  return { title: "Transaction", detail: "" };
+  return { title: "Transaction", reason, detail: "" };
 }
 
 function transactionInvolves(entry, memberId) {
@@ -1146,7 +1556,6 @@ function showEntryDetail(txId) {
   const meta = [
     { label: "Type", value: entry.type },
     { label: "Amount", value: formatVnd(entry.amountVnd || 0) },
-    { label: "Reason", value: entry.reason || "" },
     { label: "Event time", value: formatDateTime(getEventDate(entry)) },
     { label: "Created by", value: memberName(entry.createdBy) },
     { label: "Updated by", value: memberName(entry.updatedBy) },
@@ -1155,16 +1564,19 @@ function showEntryDetail(txId) {
   const detailHtml = `
     <div class="stack">
       <div>
-        <h4 class="panel-title">${desc.title}</h4>
-        <p class="muted">${desc.detail}</p>
+        <h4 class="panel-title">${escapeHtml(desc.title)}</h4>
+        <div class="ledger-reason reason-lead">${escapeHtml(
+          entry.reason || "No reason given"
+        )}</div>
+        <p class="muted">${escapeHtml(desc.detail)}</p>
       </div>
       <div class="details-grid">
         ${meta
           .map(
             (row) => `
               <div>
-                <p class="label">${row.label}</p>
-                <p>${row.value || "-"}</p>
+                <p class="label">${escapeHtml(row.label)}</p>
+                <p>${escapeHtml(row.value) || "-"}</p>
               </div>
             `
           )
@@ -1178,8 +1590,8 @@ function showEntryDetail(txId) {
                 .map(
                   (impact) => `
                     <div class="ledger-item">
-                      <strong>${impact.label}</strong>
-                      <div class="ledger-meta">${impact.note}</div>
+                      <strong>${escapeHtml(impact.label)}</strong>
+                      <div class="ledger-meta">${escapeHtml(impact.note)}</div>
                     </div>
                   `
                 )
@@ -1261,13 +1673,15 @@ async function loadAudit(txId) {
       const after = entry.after ? formatJson(entry.after) : null;
       return `
         <div class="audit-entry">
-          <p class="label">${entry.action} by ${by}</p>
-          <p class="muted">${when}</p>
+          <p class="label">${escapeHtml(entry.action)} by ${escapeHtml(by)}</p>
+          <p class="muted">${escapeHtml(when)}</p>
           <details>
             <summary>View snapshot</summary>
-            <pre>${before ? `Before:\n${before}\n` : ""}${
-        after ? `After:\n${after}` : ""
-      }</pre>
+            <pre>${escapeHtml(
+              `${before ? `Before:\n${before}\n` : ""}${
+                after ? `After:\n${after}` : ""
+              }`
+            )}</pre>
           </details>
         </div>
       `;
@@ -1484,6 +1898,25 @@ function scrollToId(id) {
 function formatVnd(amount) {
   if (!Number.isFinite(amount)) return "0 VND";
   return `${new Intl.NumberFormat("vi-VN").format(amount)} VND`;
+}
+
+function formatSignedVnd(amount) {
+  if (!Number.isFinite(amount) || amount === 0) return "0 VND";
+  const sign = amount > 0 ? "+" : "−";
+  return `${sign}${formatVnd(Math.abs(amount))}`;
+}
+
+const HTML_ESCAPES = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
 }
 
 function memberName(memberId) {
