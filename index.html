@@ -226,7 +226,7 @@
               <p class="eyebrow">Your balance story</p>
               <h1 id="journeyTitle">See how you arrived at today&apos;s balance.</h1>
               <p class="view-intro">
-                Follow the rise and fall of your balance, then open a chapter to inspect the expenses, loans and payments inside it.
+                Follow the entries that built your current balance, starting after the most recent square-up.
               </p>
             </div>
             <button class="btn btn-primary" type="button" data-open-entry><span aria-hidden="true">+</span> Add entry</button>
@@ -248,23 +248,12 @@
             <div class="journey-chart" id="journeyChart"></div>
           </section>
 
-          <section class="surface journey-chapter-surface" aria-labelledby="journeyChaptersTitle">
-            <div class="surface-header compact-header">
-              <div>
-                <p class="surface-kicker">Grouped history</p>
-                <h2 id="journeyChaptersTitle">Your debt chapters</h2>
-                <p>Each payment or full square-up closes a chapter. Open one to see what changed your balance.</p>
-              </div>
-            </div>
-            <div id="journeyTimeline"></div>
-          </section>
-
           <section class="surface journey-people-surface" aria-labelledby="allRelationshipsTitle">
             <div class="surface-header compact-header">
               <div>
                 <p class="surface-kicker">Stories by person</p>
                 <h2 id="allRelationshipsTitle">Your journey with each person</h2>
-                <p>Includes settled relationships, so old debts do not disappear from the story.</p>
+                <p>Only relationships that still contribute to your current balance are shown.</p>
               </div>
             </div>
             <div class="journey-person-grid" id="pairwiseList"></div>

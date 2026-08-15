@@ -1150,7 +1150,6 @@ button.balance-card:hover {
 }
 
 .journey-surface,
-.journey-chapter-surface,
 .journey-people-surface {
   margin-bottom: 18px;
 }
@@ -1192,6 +1191,7 @@ button.balance-card:hover {
 }
 
 .journey-chart {
+  position: relative;
   min-height: 290px;
   padding: 12px;
   overflow-x: auto;
@@ -1233,10 +1233,42 @@ button.balance-card:hover {
 }
 
 .journey-point {
+  cursor: pointer;
   fill: var(--surface);
   stroke: var(--ink);
   stroke-width: 3;
 }
+
+.journey-point:hover,
+.journey-point:focus {
+  stroke: var(--focus);
+  stroke-width: 5;
+  outline: none;
+}
+
+.journey-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  width: max-content;
+  max-width: min(260px, calc(100% - 24px));
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  font-size: 0.75rem;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 14px));
+}
+
+.journey-tooltip[hidden] { display: none; }
+.journey-tooltip span,
+.journey-tooltip small { color: var(--muted); }
+.journey-tooltip small { font-size: 0.66rem; }
 
 .journey-point.payment {
   fill: var(--gold);

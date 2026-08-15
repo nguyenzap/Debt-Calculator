@@ -451,6 +451,16 @@ export function buildJourneyChapters(rows = []) {
   return chapters;
 }
 
+// Only the entries after the latest zero balance are relevant to the current
+// debt. If the latest entry is square, there is no open journey to explain.
+export function getOpenJourneyRows(rows = []) {
+  let latestSquareIndex = -1;
+  rows.forEach((row, index) => {
+    if (finiteNumber(row.running) === 0) latestSquareIndex = index;
+  });
+  return rows.slice(latestSquareIndex + 1);
+}
+
 export function describeTransaction(transaction, options = {}) {
   const { nameOf, money } = explanationContext(options);
   const amount = money(positiveAmount(transaction.amountVnd));

@@ -132,7 +132,6 @@ const el = {
   settleSummary: document.getElementById("settleSummary"),
   journeyChart: document.getElementById("journeyChart"),
   journeySummary: document.getElementById("journeySummary"),
-  journeyTimeline: document.getElementById("journeyTimeline"),
   peopleModal: document.getElementById("peopleModal"),
   peopleList: document.getElementById("peopleList"),
   personForm: document.getElementById("personForm"),
@@ -348,10 +347,13 @@ function wireEvents() {
 
   el.myRelationships.addEventListener("click", handlePairSelection);
   el.pairwiseList.addEventListener("click", handlePairSelection);
-  el.journeyTimeline.addEventListener("click", (event) => {
-    const item = event.target.closest("[data-open-tx]");
-    if (item) showEntryDetail(item.dataset.openTx);
-  });
+  el.journeyChart.addEventListener("click", handleJourneyChartActivation);
+  el.journeyChart.addEventListener("keydown", handleJourneyChartActivation);
+  el.journeyChart.addEventListener("pointerover", showJourneyTooltip);
+  el.journeyChart.addEventListener("pointermove", moveJourneyTooltip);
+  el.journeyChart.addEventListener("pointerout", hideJourneyTooltip);
+  el.journeyChart.addEventListener("focusin", showJourneyTooltip);
+  el.journeyChart.addEventListener("focusout", hideJourneyTooltip);
   el.recentActivity.addEventListener("click", (event) => {
     const item = event.target.closest("[data-tx-id]");
     if (item) showEntryDetail(item.dataset.txId);
@@ -397,6 +399,57 @@ function handlePairSelection(event) {
   if (!item) return;
   const [debtorId, creditorId] = item.dataset.pair.split("|");
   openPairwiseBreakdown(debtorId, creditorId);
+}
+
+function journeyNodeFromEvent(event) {
+  return event.target.closest?.(".journey-point[data-open-tx]") || null;
+}
+
+function handleJourneyChartActivation(event) {
+  const node = journeyNodeFromEvent(event);
+  if (!node) return;
+  if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  const tooltip = el.journeyChart.querySelector(".journey-tooltip");
+  if (tooltip) tooltip.hidden = true;
+  showEntryDetail(node.dataset.openTx);
+}
+
+function showJourneyTooltip(event) {
+  const node = journeyNodeFromEvent(event);
+  const tooltip = el.journeyChart.querySelector(".journey-tooltip");
+  if (!node || !tooltip) return;
+  tooltip.querySelector("strong").textContent = node.dataset.tooltipTitle;
+  tooltip.querySelector("span").textContent = node.dataset.tooltipMeta;
+  tooltip.hidden = false;
+  positionJourneyTooltip(event, node, tooltip);
+}
+
+function moveJourneyTooltip(event) {
+  const node = journeyNodeFromEvent(event);
+  const tooltip = el.journeyChart.querySelector(".journey-tooltip");
+  if (node && tooltip && !tooltip.hidden) positionJourneyTooltip(event, node, tooltip);
+}
+
+function hideJourneyTooltip(event) {
+  const node = journeyNodeFromEvent(event);
+  if (!node) return;
+  if (event.relatedTarget === node) return;
+  const tooltip = el.journeyChart.querySelector(".journey-tooltip");
+  if (tooltip) tooltip.hidden = true;
+}
+
+function positionJourneyTooltip(event, node, tooltip) {
+  const chartRect = el.journeyChart.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const pointerX = Number.isFinite(event.clientX) && event.clientX
+    ? event.clientX
+    : nodeRect.left + nodeRect.width / 2;
+  const pointerY = Number.isFinite(event.clientY) && event.clientY
+    ? event.clientY
+    : nodeRect.top;
+  tooltip.style.left = `${pointerX - chartRect.left + el.journeyChart.scrollLeft}px`;
+  tooltip.style.top = `${pointerY - chartRect.top + el.journeyChart.scrollTop}px`;
 }
 
 function initialViewFromHash() {
@@ -1442,12 +1495,13 @@ function buildRelationshipJourneys(memberId) {
       const contribution = buildContributions((transaction) =>
         pairDelta(transaction, memberId, member.id)
       );
-      if (!contribution.rows.length) return null;
+      const openRows = ledgerCore.getOpenJourneyRows(contribution.rows);
+      if (!openRows.length) return null;
       return {
         member,
-        rows: contribution.rows,
+        rows: openRows,
         total: contribution.total,
-        chapters: ledgerCore.buildJourneyChapters(contribution.rows),
+        chapters: ledgerCore.buildJourneyChapters(openRows),
       };
     })
     .filter(Boolean)
@@ -1496,7 +1550,6 @@ function renderJourneyFromState() {
   if (!memberId) {
     el.journeySummary.textContent = "Choose your identity to see a personal journey.";
     el.journeyChart.innerHTML = `<div class="empty-state"><strong>Choose your identity</strong><span>The chart follows the balance of the person using the ledger.</span></div>`;
-    el.journeyTimeline.innerHTML = "";
     el.pairwiseList.innerHTML = renderRelationshipJourneys([], null);
     return;
   }
@@ -1504,15 +1557,12 @@ function renderJourneyFromState() {
   const { rows, total } = buildContributions((transaction) =>
     balanceDelta(transaction, memberId)
   );
-  const chapters = ledgerCore.buildJourneyChapters(rows);
-  const payments = rows.filter((row) => row.type === "SETTLEMENT").length;
-  el.journeySummary.textContent = `${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}, ${payments} payment ${payments === 1 ? "checkpoint" : "checkpoints"}. ${memberStateText(memberId, total)} now.`;
-  el.journeyChart.innerHTML = renderBalanceJourneyChart(rows, memberId);
-  el.journeyTimeline.innerHTML = renderJourneyChapters(
-    chapters,
-    false,
-    (running) => memberStateText(memberId, running)
-  );
+  const openRows = ledgerCore.getOpenJourneyRows(rows);
+  const payments = openRows.filter((row) => row.type === "SETTLEMENT").length;
+  el.journeySummary.textContent = openRows.length
+    ? `${openRows.length} ${openRows.length === 1 ? "entry builds" : "entries build"} your current position, with ${payments} payment ${payments === 1 ? "checkpoint" : "checkpoints"}. ${memberStateText(memberId, total)} now.`
+    : "You are square now, so there is no open debt journey to explain.";
+  el.journeyChart.innerHTML = renderBalanceJourneyChart(openRows, memberId);
   el.pairwiseList.innerHTML = renderRelationshipJourneys(
     buildRelationshipJourneys(memberId),
     memberId
@@ -1521,7 +1571,7 @@ function renderJourneyFromState() {
 
 function renderBalanceJourneyChart(rows, memberId) {
   if (!rows.length) {
-    return `<div class="empty-state"><strong>No balance changes yet</strong><span>Your first expense or loan will start the chart.</span></div>`;
+    return `<div class="empty-state"><strong>You are all square</strong><span>A new expense or loan will begin the next journey.</span></div>`;
   }
   const width = 920;
   const height = 310;
@@ -1541,10 +1591,12 @@ function renderBalanceJourneyChart(rows, memberId) {
   const zeroY = y(0);
   const points = rows.map((row, index) => {
     const checkpoint = row.running === 0 ? "square" : row.type === "SETTLEMENT" ? "payment" : "entry";
-    return `<circle class="journey-point ${checkpoint}" cx="${x(index + 1)}" cy="${y(row.running)}" r="${checkpoint === "entry" ? 5 : 7}"><title>${escapeHtml(`${row.reason || "No reason given"} — ${formatSignedVnd(row.delta)} — ${memberStateText(memberId, row.running)}`)}</title></circle>`;
+    const title = row.reason || "No reason given";
+    const meta = `${row.type} \u00b7 ${formatSignedVnd(row.delta)} \u00b7 ${memberStateText(memberId, row.running)}`;
+    return `<circle class="journey-point ${checkpoint}" cx="${x(index + 1)}" cy="${y(row.running)}" r="${checkpoint === "entry" ? 6 : 8}" tabindex="0" role="button" data-open-tx="${escapeHtml(row.txId)}" data-tooltip-title="${escapeHtml(title)}" data-tooltip-meta="${escapeHtml(meta)}" aria-label="${escapeHtml(`${title}. ${meta}. Open entry details.`)}"></circle>`;
   }).join("");
   return `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Your balance after each ledger entry, from oldest to newest">
+    <svg viewBox="0 0 ${width} ${height}" role="group" aria-label="Entries building your current balance, from oldest to newest">
       <rect class="journey-zone receive" x="${pad.left}" y="${pad.top}" width="${width - pad.left - pad.right}" height="${Math.max(0, zeroY - pad.top)}"></rect>
       <rect class="journey-zone owe" x="${pad.left}" y="${zeroY}" width="${width - pad.left - pad.right}" height="${Math.max(0, height - pad.bottom - zeroY)}"></rect>
       <line class="journey-zero-line" x1="${pad.left}" x2="${width - pad.right}" y1="${zeroY}" y2="${zeroY}"></line>
@@ -1554,7 +1606,8 @@ function renderBalanceJourneyChart(rows, memberId) {
       ${points}
       <text class="journey-date-label" x="${pad.left}" y="${height - 8}">${escapeHtml(formatJourneyDate(rows[0].date))}</text>
       <text class="journey-date-label end" x="${width - pad.right}" y="${height - 8}">${escapeHtml(formatJourneyDate(rows[rows.length - 1].date))}</text>
-    </svg>`;
+    </svg>
+    <div class="journey-tooltip" hidden><strong></strong><span></span><small>Click for full entry details</small></div>`;
 }
 
 // Positive amount = debtorId owes creditorId more because of this transaction.
@@ -1669,7 +1722,8 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
   const { rows, total } = buildContributions((tx) =>
     pairDelta(tx, debtorId, creditorId)
   );
-  const chapters = ledgerCore.buildJourneyChapters(rows);
+  const openRows = ledgerCore.getOpenJourneyRows(rows);
+  const chapters = ledgerCore.buildJourneyChapters(openRows);
 
   const debtor = memberName(debtorId);
   const creditor = memberName(creditorId);
@@ -1695,20 +1749,20 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
       <p class="label">Result</p>
       <p class="breakdown-total">${escapeHtml(headline)}</p>
       <p class="muted">
-        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} contain ${rows.length} ${rows.length === 1 ? "entry" : "entries"} between them.
+        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} contain ${openRows.length} ${openRows.length === 1 ? "entry" : "entries"} since their latest square-up.
         Amounts marked <span class="delta up">+</span> grow what ${escapeHtml(
           debtor
         )} owes, <span class="delta down">&minus;</span> shrinks it.
       </p>
     </div>
     ${
-      rows.length
+      openRows.length
         ? renderJourneyChapters(
             chapters,
             true,
             (running) => pairStateText(debtorId, creditorId, running)
           )
-        : "<p class='muted'>No shared transactions between these two yet.</p>"
+        : "<p class='muted'>They are square now, so there is no open debt journey to explain.</p>"
     }
     <p class="muted">Click any entry above to open its full detail.</p>
   `;
@@ -1719,7 +1773,8 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
 function openBalanceBreakdown(memberId) {
   state.breakdownContext = { type: "member", memberId };
   const { rows, total } = buildContributions((tx) => balanceDelta(tx, memberId));
-  const chapters = ledgerCore.buildJourneyChapters(rows);
+  const openRows = ledgerCore.getOpenJourneyRows(rows);
+  const chapters = ledgerCore.buildJourneyChapters(openRows);
   const label = memberName(memberId);
 
   let headline;
@@ -1739,9 +1794,9 @@ function openBalanceBreakdown(memberId) {
       <p class="label">Result</p>
       <p class="breakdown-total">${escapeHtml(headline)}</p>
       <p class="muted">
-        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} group ${rows.length} ${rows.length === 1 ? "entry" : "entries"} that affect ${escapeHtml(
+        ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"} group ${openRows.length} ${openRows.length === 1 ? "entry" : "entries"} since ${escapeHtml(
     label
-  )}, oldest first.
+  )}'s latest square-up.
         <span class="delta down">+</span> means money owed to ${escapeHtml(
           label
         )}, <span class="delta up">&minus;</span> means money ${escapeHtml(
@@ -1790,13 +1845,13 @@ function openBalanceBreakdown(memberId) {
     <div>
       <p class="label">Balance journey</p>
       ${
-        rows.length
+        openRows.length
           ? renderJourneyChapters(
               chapters,
               false,
               (running) => memberStateText(memberId, running)
             )
-          : "<p class='muted'>No transactions involve this member yet.</p>"
+          : "<p class='muted'>This balance is square, so there is no open journey to explain.</p>"
       }
     </div>
     <p class="muted">Click any entry above to open its full detail.</p>
