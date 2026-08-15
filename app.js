@@ -165,8 +165,6 @@ let d3Library = null;
 let d3LoadPromise = null;
 let networkRenderVersion = 0;
 
-init();
-
 function init() {
   wireEvents();
   loadCurrentMember();
@@ -2687,4 +2685,5 @@ function formatJson(value) {
   return ledgerCore.formatJson(value);
 }
 
+init();
 updateEntryType();
