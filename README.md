@@ -70,7 +70,8 @@ suggestions, chronological debt explanations, VND/date formatting, and the stati
   - Older transactions may omit either optional field. Treat a missing category
     as uncategorized and tolerate a missing schema version as legacy data.
   - LOAN: `fromId`, `toId`
-  - SETTLEMENT: `fromId`, `toId`
+  - SETTLEMENT: `fromId`, `toId`, optional `settlementScope: "GROUP"` when the
+    payment was recorded from the group-wide suggested settlement plan
   - EXPENSE: `payerId`, `participants: [{ memberId, shareVnd }]`, optional
     `splitMethod` (`equal` or `custom`)
 - `groups/{groupId}/transactions/{txId}/audit/{auditId}`

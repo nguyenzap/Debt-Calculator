@@ -239,9 +239,65 @@ export function buildSettleSuggestions(balances = {}) {
   return suggestions;
 }
 
+function edgesFromSuggestions(suggestions = []) {
+  const edges = new Map();
+  suggestions.forEach(({ debtor, creditor, amount: rawAmount }) => {
+    const amount = positiveAmount(rawAmount);
+    if (!debtor || !creditor || debtor === creditor || !amount) return;
+    edges.set(`${debtor}|${creditor}`, amount);
+  });
+  return edges;
+}
+
+function signedPairBalance(netEdges, debtorId, creditorId) {
+  return (
+    finiteNumber(netEdges.get(`${debtorId}|${creditorId}`)) -
+    finiteNumber(netEdges.get(`${creditorId}|${debtorId}`))
+  );
+}
+
+function settlementRebalancesGroup(transaction, beforeNetEdges) {
+  if (transaction.type !== "SETTLEMENT") return false;
+  if (transaction.settlementScope === "GROUP") return true;
+
+  // Older suggested-payment entries did not store a scope. A payment larger
+  // than the payer's direct debt can only be settling their group-wide net
+  // position; treating the excess as a personal loan creates a phantom debt.
+  const directDebt = Math.max(
+    0,
+    signedPairBalance(beforeNetEdges, transaction.fromId, transaction.toId)
+  );
+  return positiveAmount(transaction.amountVnd) > directDebt;
+}
+
+function buildCheckpointedTimeline(transactions = [], members = [], onStep = null) {
+  let edges = new Map();
+
+  sortActiveTransactions(transactions).forEach((transaction) => {
+    const beforeNetEdges = netPairwise(edges, members);
+    const rebalanceGroup = settlementRebalancesGroup(transaction, beforeNetEdges);
+    const transactionEdges = buildEdges([transaction]);
+    transactionEdges.forEach((amount, key) => {
+      edges.set(key, finiteNumber(edges.get(key)) + finiteNumber(amount));
+    });
+
+    let afterNetEdges = netPairwise(edges, members);
+    if (rebalanceGroup) {
+      const balances = computeNetBalances(afterNetEdges, members);
+      afterNetEdges = edgesFromSuggestions(buildSettleSuggestions(balances));
+      edges = new Map(afterNetEdges);
+    }
+
+    if (typeof onStep === "function") {
+      onStep({ transaction, beforeNetEdges, afterNetEdges, rebalanceGroup });
+    }
+  });
+
+  return { edges, netEdges: netPairwise(edges, members) };
+}
+
 export function buildLedgerSummary(transactions = [], members = []) {
-  const edges = buildEdges(transactions);
-  const netEdges = netPairwise(edges, members);
+  const { edges, netEdges } = buildCheckpointedTimeline(transactions, members);
   const balances = computeNetBalances(netEdges, members);
   return {
     edges,
@@ -411,6 +467,62 @@ export function buildContributions(transactions = [], deltaFor = () => ({ amount
       running,
     });
   });
+
+  return { rows, total: running };
+}
+
+/**
+ * Build a pair journey from checkpointed network snapshots. Group settlement
+ * payments may clear or reroute more than the payer's direct debt, so their
+ * pair impact is the before/after network difference rather than the full cash
+ * amount recorded on the transaction.
+ */
+export function buildPairContributions(
+  transactions = [],
+  debtorId,
+  creditorId,
+  options = {}
+) {
+  const rows = [];
+  const { nameOf, money } = explanationContext(options);
+  const members = options.members || [];
+  let running = 0;
+
+  buildCheckpointedTimeline(
+    transactions,
+    members,
+    ({ transaction, beforeNetEdges, afterNetEdges, rebalanceGroup }) => {
+      const before = signedPairBalance(beforeNetEdges, debtorId, creditorId);
+      const after = signedPairBalance(afterNetEdges, debtorId, creditorId);
+      const amount = after - before;
+      const isPaymentPair =
+        transaction.type === "SETTLEMENT" &&
+        ((transaction.fromId === debtorId && transaction.toId === creditorId) ||
+          (transaction.fromId === creditorId && transaction.toId === debtorId));
+      if (!amount && !(rebalanceGroup && isPaymentPair)) return;
+
+      let note = pairDelta(transaction, debtorId, creditorId, options).note;
+      if (rebalanceGroup) {
+        const payment = money(positiveAmount(transaction.amountVnd));
+        const payer = nameOf(transaction.fromId);
+        const receiver = nameOf(transaction.toId);
+        note = isPaymentPair
+          ? `${payer} paid ${receiver} ${payment}; the group settlement checkpoint rebalanced their relationship`
+          : `Group balances were rebalanced after ${payer} paid ${receiver} ${payment}`;
+      }
+
+      running = after;
+      rows.push({
+        txId: transaction.id,
+        date: getEventDate(transaction),
+        type: transaction.type,
+        reason: transaction.reason || "",
+        note: note || "",
+        delta: amount,
+        running,
+      });
+    }
+  );
 
   return { rows, total: running };
 }

@@ -67,6 +67,7 @@ const state = {
   peopleContext: null,
   breakdownContext: null,
   detailReturnBreakdown: null,
+  settlementScope: null,
 };
 
 const el = {
@@ -184,6 +185,7 @@ function wireEvents() {
   document.querySelectorAll("[data-open-entry]").forEach((control) => {
     control.addEventListener("click", () => {
       if (control.dataset.entryType && !state.editingTxId) {
+        state.settlementScope = null;
         el.entryType.value = control.dataset.entryType;
         updateEntryType();
       }
@@ -224,12 +226,18 @@ function wireEvents() {
     subscribeTransactions();
   });
 
-  el.jumpAddEntry.addEventListener("click", openEntryComposer);
+  el.jumpAddEntry.addEventListener("click", () => {
+    if (!state.editingTxId) state.settlementScope = null;
+    openEntryComposer();
+  });
   el.jumpSettle.addEventListener("click", () => switchView("settle"));
   el.overviewExplainBalance.addEventListener("click", openCurrentMemberBreakdown);
   el.personalBalanceCard.addEventListener("click", openCurrentMemberBreakdown);
 
-  el.entryType.addEventListener("change", updateEntryType);
+  el.entryType.addEventListener("change", () => {
+    state.settlementScope = null;
+    updateEntryType();
+  });
   el.expensePayer.addEventListener("change", () => {
     ensurePayerIncluded();
     recalcParticipants();
@@ -1208,6 +1216,7 @@ async function handleSubmit(event) {
       ...commonFields,
       fromId,
       toId,
+      ...(state.settlementScope ? { settlementScope: state.settlementScope } : {}),
     };
     await submitTransactionPayload(payload);
     return;
@@ -1321,6 +1330,7 @@ async function saveTransaction(payload) {
   }
 
   el.entryForm.reset();
+  state.settlementScope = null;
   state.splitMode = "equal";
   state.eventAtDirty = false;
   el.eventAtPicker.classList.add("hidden");
@@ -1449,8 +1459,9 @@ function renderPersonalRelationships(relationships) {
   return relationships
     .map((relationship) => {
       const other = memberName(relationship.otherId);
-      const history = buildContributions((transaction) =>
-        pairDelta(transaction, relationship.debtorId, relationship.creditorId)
+      const history = buildPairContributions(
+        relationship.debtorId,
+        relationship.creditorId
       );
       return `
         <button class="relationship-row ${relationship.kind}" type="button" data-pair="${escapeHtml(
@@ -1504,9 +1515,7 @@ function buildRelationshipJourneys(memberId) {
   return state.members
     .filter((member) => member.id !== memberId)
     .map((member) => {
-      const contribution = buildContributions((transaction) =>
-        pairDelta(transaction, memberId, member.id)
-      );
+      const contribution = buildPairContributions(memberId, member.id);
       const openRows = ledgerCore.getOpenJourneyRows(contribution.rows);
       if (!openRows.length) return null;
       return {
@@ -1731,6 +1740,19 @@ function buildContributions(deltaFor) {
   return ledgerCore.buildContributions(state.transactions, deltaFor);
 }
 
+function buildPairContributions(debtorId, creditorId) {
+  return ledgerCore.buildPairContributions(
+    state.transactions,
+    debtorId,
+    creditorId,
+    {
+      members: state.members,
+      memberName,
+      formatAmount: formatVnd,
+    }
+  );
+}
+
 function renderBreakdownSteps(rows, positiveIsBad, runningLabel = null) {
   return rows
     .map((row) => {
@@ -1818,9 +1840,7 @@ function openPairwiseBreakdown(debtorId, creditorId, fromMemberId = null) {
     creditorId,
     fromMemberId,
   };
-  const { rows, total } = buildContributions((tx) =>
-    pairDelta(tx, debtorId, creditorId)
-  );
+  const { rows, total } = buildPairContributions(debtorId, creditorId);
   const openRows = ledgerCore.getOpenJourneyRows(rows);
   const chapters = ledgerCore.buildJourneyChapters(openRows);
 
@@ -2219,6 +2239,7 @@ function renderSettleUp() {
 
 function prefillSettlement(fromId, toId, amount) {
   if (state.editingTxId) clearEdit();
+  state.settlementScope = "GROUP";
   el.entryType.value = "SETTLEMENT";
   updateEntryType();
   el.settleFrom.value = fromId;
@@ -2332,9 +2353,7 @@ function computeImpacts(entry) {
       ];
     }
 
-    const { rows } = buildContributions((transaction) =>
-      pairDelta(transaction, entry.fromId, entry.toId)
-    );
+    const { rows } = buildPairContributions(entry.fromId, entry.toId);
     const row = rows.find((candidate) => candidate.txId === entry.id);
     const before = row ? row.running - row.delta : 0;
     const after = row ? row.running : before - amount;
@@ -2440,6 +2459,7 @@ function startEditSelected() {
   if (!entry) return;
 
   state.editingTxId = entry.id;
+  state.settlementScope = null;
   el.entryType.value = entry.type;
   el.entryType.disabled = true;
   updateEntryType();
@@ -2454,6 +2474,7 @@ function startEditSelected() {
   }
 
   if (entry.type === "SETTLEMENT") {
+    state.settlementScope = entry.settlementScope || null;
     el.settleFrom.value = entry.fromId;
     el.settleTo.value = entry.toId;
   }
@@ -2486,6 +2507,7 @@ function startEditSelected() {
 
 function clearEdit() {
   state.editingTxId = null;
+  state.settlementScope = null;
   el.entryType.disabled = false;
   el.entryModeNote.textContent = "Create a new transaction.";
   el.cancelEdit.classList.add("hidden");
