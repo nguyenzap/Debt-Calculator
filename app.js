@@ -139,7 +139,7 @@ const el = {
   journeySummary: document.getElementById("journeySummary"),
   networkMap: document.getElementById("networkMap"),
   qrOwnerName: document.getElementById("qrOwnerName"),
-  myQrPreview: document.getElementById("myQrPreview"),
+  qrOwnerState: document.getElementById("qrOwnerState"),
   qrUploadInput: document.getElementById("qrUploadInput"),
   qrUploadButton: document.getElementById("qrUploadButton"),
   qrRemoveButton: document.getElementById("qrRemoveButton"),
@@ -884,24 +884,21 @@ function renderPaymentQrs() {
   const ownQr = currentMember ? state.paymentQrs.get(currentMember.id) : null;
   const ownUrl = safeQrDataUrl(ownQr?.dataUrl);
 
-  el.qrOwnerName.textContent = currentMember ? `${currentMember.displayName}'s` : "Your";
+  el.qrOwnerName.textContent = currentMember ? `${currentMember.displayName}'s` : "your";
+  el.qrOwnerState.textContent = currentMember
+    ? ownUrl
+      ? "Your QR is saved. Replace it only when your payment code changes."
+      : "No QR saved yet. Upload one so other members can pay you."
+    : "Choose your identity to manage your QR.";
   el.qrUploadButton.textContent = ownUrl ? "Replace QR image" : "Upload QR image";
   el.qrUploadButton.disabled = !currentMember || !db;
   el.qrRemoveButton.classList.toggle("hidden", !ownUrl);
   el.qrRemoveButton.disabled = !currentMember || !db;
-  el.myQrPreview.innerHTML = ownUrl
-    ? `<div class="qr-image-frame qr-image-own"><img src="${escapeHtml(
-        ownUrl
-      )}" alt="${escapeHtml(`${currentMember.displayName}'s payment QR code`)}" /></div>`
-    : qrEmptyMarkup(
-        currentMember
-          ? "Upload yours so the group can pay you without asking for it again."
-          : "Choose your identity before uploading a payment QR."
-      );
-
-  const members = identityMembers();
+  const members = identityMembers().filter(
+    (member) => member.id !== state.currentMemberId
+  );
   if (!members.length) {
-    el.qrGallery.innerHTML = qrEmptyMarkup("No app members are available.");
+    el.qrGallery.innerHTML = qrEmptyMarkup("No other app members are available.");
     return;
   }
 
@@ -917,9 +914,7 @@ function renderPaymentQrs() {
               memberInitials(member.displayName)
             )}</span>
             <span>
-              <strong>${escapeHtml(member.displayName)}${
-                member.id === state.currentMemberId ? " (you)" : ""
-              }</strong>
+              <strong>${escapeHtml(member.displayName)}</strong>
               <small>${url ? (updatedAt ? `Updated ${formatDateTime(updatedAt)}` : "Ready to scan") : "Not uploaded yet"}</small>
             </span>
           </div>

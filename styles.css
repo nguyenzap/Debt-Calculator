@@ -1487,24 +1487,48 @@ button.balance-card:hover {
 
 .qr-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: 1fr;
   gap: 18px;
 }
 
 .qr-manager {
-  position: sticky;
-  top: calc(var(--header-height) + 28px);
+  padding-block: 20px;
 }
 
-.qr-own-preview {
+.qr-manager-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.qr-manager-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+}
+
+.qr-manager-main h2 {
+  margin-top: 3px;
+}
+
+.qr-manager-mark {
   display: grid;
-  min-height: 300px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
   place-items: center;
-  padding: 16px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 24px;
-  background: var(--surface-soft);
+  border-radius: 15px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  font-size: 1.45rem;
+}
+
+.qr-owner-state {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .qr-image-frame {
@@ -1527,20 +1551,16 @@ button.balance-card:hover {
   object-fit: contain;
 }
 
-.qr-image-own {
-  max-width: 330px;
-}
-
 .qr-upload-actions {
   display: flex;
   flex-wrap: wrap;
+  flex: 0 0 auto;
   gap: 9px;
-  margin-top: 16px;
 }
 
 .qr-help,
 .qr-status {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
   font-size: 0.78rem;
 }
@@ -2516,6 +2536,15 @@ body.locked .modal {
 
   .qr-gallery {
     grid-template-columns: 1fr;
+  }
+
+  .qr-manager-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .qr-upload-actions {
+    width: 100%;
   }
 
   .relationship-row {

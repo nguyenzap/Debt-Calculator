@@ -234,20 +234,22 @@
 
           <div class="qr-layout">
             <section class="surface qr-manager" aria-labelledby="myQrTitle">
-              <div class="surface-header">
-                <div>
+              <div class="qr-manager-row">
+                <div class="qr-manager-main">
+                  <span class="qr-manager-mark" aria-hidden="true">&#9638;</span>
+                  <div>
                   <p class="surface-kicker">Your payment code</p>
-                  <h2 id="myQrTitle"><span id="qrOwnerName">Your</span> QR</h2>
-                  <p>Upload a clear screenshot or photo. The app compresses it before saving.</p>
+                    <h2 id="myQrTitle">Manage <span id="qrOwnerName">your</span> QR</h2>
+                    <p class="qr-owner-state" id="qrOwnerState">Choose your identity to manage your QR.</p>
+                  </div>
+                </div>
+                <div class="qr-upload-actions">
+                  <input id="qrUploadInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <button class="btn btn-primary" type="button" id="qrUploadButton">Upload QR image</button>
+                  <button class="btn btn-danger hidden" type="button" id="qrRemoveButton">Remove</button>
                 </div>
               </div>
-              <div class="qr-own-preview" id="myQrPreview"></div>
-              <div class="qr-upload-actions">
-                <input id="qrUploadInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" />
-                <button class="btn btn-primary" type="button" id="qrUploadButton">Upload QR image</button>
-                <button class="btn btn-danger hidden" type="button" id="qrRemoveButton">Remove</button>
-              </div>
-              <p class="qr-help">PNG, JPEG, or WebP up to 15 MB. Keep the QR fully visible and well lit.</p>
+              <p class="qr-help">Upload a clear PNG, JPEG, or WebP up to 15 MB. It will be compressed automatically.</p>
               <p class="qr-status" id="qrUploadStatus" role="status" aria-live="polite"></p>
             </section>
 
