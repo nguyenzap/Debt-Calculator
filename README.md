@@ -13,6 +13,7 @@ Static GitHub Pages app + Firebase backend for tracking shared debts with four f
 - Collapsible debt chapters grouped by settlements and square-up moments
 - One-click JSON download of members and transactions for a portable manual snapshot
 - Practical settle-up suggestions
+- Shared payment QR gallery with per-member upload, replacement, download, and removal
 - Soft delete and audit log
 - "Birthday auth" identity labeling
 - Ledger-only contacts for people who can owe or receive money without becoming app identities
@@ -76,6 +77,10 @@ suggestions, chronological debt explanations, VND/date formatting, and the stati
     `splitMethod` (`equal` or `custom`)
 - `groups/{groupId}/transactions/{txId}/audit/{auditId}`
   - `action`, `at`, `by`, `before`, `after`
+- `groups/{groupId}/paymentQrs/{memberId}`
+  - A compressed PNG, JPEG, or WebP data URL plus its dimensions, original file
+    name, schema version, and update metadata
+  - QR images are resized client-side and capped at 700 KB per document
 
 ## Notes
 

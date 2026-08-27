@@ -7,6 +7,7 @@ import {
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -51,6 +52,8 @@ const APP_CONFIG = {
 };
 
 const STORAGE_KEY = "debt.currentMemberId";
+const QR_MAX_FILE_BYTES = 15 * 1024 * 1024;
+const QR_MAX_DATA_URL_LENGTH = 700_000;
 
 const state = {
   members: [...APP_CONFIG.members],
@@ -68,6 +71,7 @@ const state = {
   breakdownContext: null,
   detailReturnBreakdown: null,
   settlementScope: null,
+  paymentQrs: new Map(),
 };
 
 const el = {
@@ -134,6 +138,13 @@ const el = {
   journeyChart: document.getElementById("journeyChart"),
   journeySummary: document.getElementById("journeySummary"),
   networkMap: document.getElementById("networkMap"),
+  qrOwnerName: document.getElementById("qrOwnerName"),
+  myQrPreview: document.getElementById("myQrPreview"),
+  qrUploadInput: document.getElementById("qrUploadInput"),
+  qrUploadButton: document.getElementById("qrUploadButton"),
+  qrRemoveButton: document.getElementById("qrRemoveButton"),
+  qrUploadStatus: document.getElementById("qrUploadStatus"),
+  qrGallery: document.getElementById("qrGallery"),
   peopleModal: document.getElementById("peopleModal"),
   peopleList: document.getElementById("peopleList"),
   personForm: document.getElementById("personForm"),
@@ -163,6 +174,7 @@ let db = null;
 let auth = null;
 let unsubscribeTransactions = null;
 let unsubscribeGroup = null;
+let unsubscribePaymentQrs = null;
 
 function init() {
   wireEvents();
@@ -222,8 +234,12 @@ function wireEvents() {
     if (unsubscribeGroup) {
       unsubscribeGroup();
     }
+    if (unsubscribePaymentQrs) {
+      unsubscribePaymentQrs();
+    }
     subscribeGroup();
     subscribeTransactions();
+    subscribePaymentQrs();
   });
 
   el.jumpAddEntry.addEventListener("click", () => {
@@ -231,6 +247,9 @@ function wireEvents() {
     openEntryComposer();
   });
   el.jumpSettle.addEventListener("click", () => switchView("settle"));
+  el.qrUploadButton.addEventListener("click", () => el.qrUploadInput.click());
+  el.qrUploadInput.addEventListener("change", handleQrUpload);
+  el.qrRemoveButton.addEventListener("click", removeCurrentQr);
   el.overviewExplainBalance.addEventListener("click", openCurrentMemberBreakdown);
   el.personalBalanceCard.addEventListener("click", openCurrentMemberBreakdown);
 
@@ -475,13 +494,13 @@ function positionJourneyTooltip(event, node, tooltip) {
 function initialViewFromHash() {
   const requested = window.location.hash.replace("#", "");
   if (requested === "network") return "journey";
-  return ["overview", "activity", "settle", "journey"].includes(requested)
+  return ["overview", "activity", "settle", "qr", "journey"].includes(requested)
     ? requested
     : "overview";
 }
 
 function switchView(viewName, { focus = true, updateHash = true } = {}) {
-  const nextView = ["overview", "activity", "settle", "journey"].includes(viewName)
+  const nextView = ["overview", "activity", "settle", "qr", "journey"].includes(viewName)
     ? viewName
     : "overview";
   state.activeView = nextView;
@@ -727,6 +746,7 @@ function startFirebase() {
       recalcParticipants();
       subscribeGroup();
       subscribeTransactions();
+      subscribePaymentQrs();
       if (!state.currentMemberId) {
         openIdentityModal();
       }
@@ -800,12 +820,268 @@ function subscribeTransactions() {
   );
 }
 
+function subscribePaymentQrs() {
+  if (!db) return;
+  const qrCollection = collection(db, "groups", APP_CONFIG.groupId, "paymentQrs");
+  unsubscribePaymentQrs = onSnapshot(
+    qrCollection,
+    (snapshot) => {
+      state.paymentQrs = new Map(
+        snapshot.docs.map((document) => [
+          document.id,
+          { memberId: document.id, ...document.data() },
+        ])
+      );
+      renderPaymentQrs();
+    },
+    (error) => {
+      console.error("Payment QR subscription failed", error);
+      el.qrUploadStatus.textContent = "Payment QR sync is unavailable.";
+    }
+  );
+}
+
 function renderAll() {
   renderDashboard();
   renderLedger();
   renderSettleUp();
+  renderPaymentQrs();
   updateActiveMember();
   if (state.activeView === "journey") renderJourneyFromState();
+}
+
+function safeQrDataUrl(value) {
+  if (typeof value !== "string" || value.length > QR_MAX_DATA_URL_LENGTH) return "";
+  const match = value.match(/^data:image\/(png|jpeg|webp);base64,/);
+  if (!match) return "";
+  const payload = value.slice(match[0].length);
+  return payload && /^[A-Za-z0-9+/=]+$/.test(payload) ? value : "";
+}
+
+function qrDownloadName(displayName) {
+  const safeName = String(displayName || "payment")
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  return `${safeName || "payment"}-qr.webp`;
+}
+
+function qrEmptyMarkup(message) {
+  return `
+    <div class="qr-empty">
+      <span class="qr-empty-mark" aria-hidden="true">&#9638;</span>
+      <strong>No QR uploaded</strong>
+      <span>${escapeHtml(message)}</span>
+    </div>`;
+}
+
+function renderPaymentQrs() {
+  if (!el.qrGallery) return;
+  const currentMember = state.members.find(
+    (member) => member.id === state.currentMemberId
+  );
+  const ownQr = currentMember ? state.paymentQrs.get(currentMember.id) : null;
+  const ownUrl = safeQrDataUrl(ownQr?.dataUrl);
+
+  el.qrOwnerName.textContent = currentMember ? `${currentMember.displayName}'s` : "Your";
+  el.qrUploadButton.textContent = ownUrl ? "Replace QR image" : "Upload QR image";
+  el.qrUploadButton.disabled = !currentMember || !db;
+  el.qrRemoveButton.classList.toggle("hidden", !ownUrl);
+  el.qrRemoveButton.disabled = !currentMember || !db;
+  el.myQrPreview.innerHTML = ownUrl
+    ? `<div class="qr-image-frame qr-image-own"><img src="${escapeHtml(
+        ownUrl
+      )}" alt="${escapeHtml(`${currentMember.displayName}'s payment QR code`)}" /></div>`
+    : qrEmptyMarkup(
+        currentMember
+          ? "Upload yours so the group can pay you without asking for it again."
+          : "Choose your identity before uploading a payment QR."
+      );
+
+  const members = identityMembers();
+  if (!members.length) {
+    el.qrGallery.innerHTML = qrEmptyMarkup("No app members are available.");
+    return;
+  }
+
+  el.qrGallery.innerHTML = members
+    .map((member) => {
+      const qr = state.paymentQrs.get(member.id);
+      const url = safeQrDataUrl(qr?.dataUrl);
+      const updatedAt = toDate(qr?.updatedAt);
+      return `
+        <article class="qr-card ${url ? "ready" : "missing"}">
+          <div class="qr-card-person">
+            <span class="relationship-avatar" aria-hidden="true">${escapeHtml(
+              memberInitials(member.displayName)
+            )}</span>
+            <span>
+              <strong>${escapeHtml(member.displayName)}${
+                member.id === state.currentMemberId ? " (you)" : ""
+              }</strong>
+              <small>${url ? (updatedAt ? `Updated ${formatDateTime(updatedAt)}` : "Ready to scan") : "Not uploaded yet"}</small>
+            </span>
+          </div>
+          ${
+            url
+              ? `<div class="qr-image-frame"><img loading="lazy" src="${escapeHtml(
+                  url
+                )}" alt="${escapeHtml(`${member.displayName}'s payment QR code`)}" /></div>
+                 <a class="btn btn-soft qr-download" href="${escapeHtml(url)}" download="${escapeHtml(
+                   qrDownloadName(member.displayName)
+                 )}">Download QR</a>`
+              : qrEmptyMarkup(`${member.displayName} has not shared a payment code.`)
+          }
+        </article>`;
+    })
+    .join("");
+}
+
+function setQrBusy(busy) {
+  el.qrUploadButton.disabled = busy || !state.currentMemberId || !db;
+  el.qrRemoveButton.disabled = busy || !state.currentMemberId || !db;
+  el.qrUploadInput.disabled = busy;
+}
+
+function setQrStatus(message, tone = "") {
+  el.qrUploadStatus.textContent = message;
+  el.qrUploadStatus.dataset.tone = tone;
+}
+
+async function handleQrUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const memberId = state.currentMemberId;
+
+  if (!memberId || !isIdentityMember(memberId)) {
+    setQrStatus("Choose your identity before uploading a QR.", "error");
+    event.target.value = "";
+    return;
+  }
+  if (!db) {
+    setQrStatus("The ledger is still connecting. Try again in a moment.", "error");
+    event.target.value = "";
+    return;
+  }
+
+  setQrBusy(true);
+  setQrStatus("Preparing and compressing your QR image...");
+  try {
+    const prepared = await prepareQrImage(file);
+    const qrRef = doc(db, "groups", APP_CONFIG.groupId, "paymentQrs", memberId);
+    await setDoc(qrRef, {
+      dataUrl: prepared.dataUrl,
+      mimeType: prepared.mimeType,
+      width: prepared.width,
+      height: prepared.height,
+      originalName:
+        file.name.replace(/[^\x20-\x7E]/g, "").slice(0, 120) || "payment-qr",
+      schemaVersion: 1,
+      updatedAt: serverTimestamp(),
+      updatedBy: memberId,
+    });
+    setQrStatus("Your payment QR is saved and visible to the group.", "success");
+  } catch (error) {
+    console.error("Failed to save payment QR", error);
+    const message = error?.message?.startsWith("QR_")
+      ? error.message.slice(3)
+      : error?.code === "permission-denied"
+        ? "QR uploads need the latest Firestore rules to be deployed."
+        : "Could not save that image. Please try another PNG, JPEG, or WebP file.";
+    setQrStatus(message, "error");
+  } finally {
+    event.target.value = "";
+    setQrBusy(false);
+  }
+}
+
+async function removeCurrentQr() {
+  const memberId = state.currentMemberId;
+  if (!memberId || !db || !state.paymentQrs.has(memberId)) return;
+  if (!confirm(`Remove ${memberName(memberId)}'s payment QR?`)) return;
+
+  setQrBusy(true);
+  setQrStatus("Removing your payment QR...");
+  try {
+    const qrRef = doc(db, "groups", APP_CONFIG.groupId, "paymentQrs", memberId);
+    await deleteDoc(qrRef);
+    setQrStatus("Your payment QR was removed.", "success");
+  } catch (error) {
+    console.error("Failed to remove payment QR", error);
+    setQrStatus("Could not remove the QR. Please try again.", "error");
+  } finally {
+    setQrBusy(false);
+  }
+}
+
+function loadQrImage(file) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("QR_That image format could not be opened."));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function prepareQrImage(file) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("QR_Select an image file.");
+  }
+  if (file.size > QR_MAX_FILE_BYTES) {
+    throw new Error("QR_Choose an image smaller than 15 MB.");
+  }
+
+  const image = await loadQrImage(file);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error("QR_That image has no readable dimensions.");
+  }
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("QR_This browser cannot prepare the image.");
+
+  const sizeLimits = [1200, 1000, 800, 650];
+  const qualities = [0.92, 0.84, 0.76, 0.68];
+  const renderedSizes = new Set();
+  for (const sizeLimit of sizeLimits) {
+    const scale = Math.min(1, sizeLimit / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const sizeKey = `${width}x${height}`;
+    if (renderedSizes.has(sizeKey)) continue;
+    renderedSizes.add(sizeKey);
+
+    canvas.width = width;
+    canvas.height = height;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+
+    for (const quality of qualities) {
+      let dataUrl = canvas.toDataURL("image/webp", quality);
+      if (!dataUrl.startsWith("data:image/webp")) {
+        dataUrl = canvas.toDataURL("image/jpeg", quality);
+      }
+      if (dataUrl.length <= QR_MAX_DATA_URL_LENGTH) {
+        const mimeType = dataUrl.slice(5, dataUrl.indexOf(";"));
+        return { dataUrl, mimeType, width, height };
+      }
+    }
+  }
+
+  throw new Error("QR_The image is still too large after compression. Crop closer to the QR and try again.");
 }
 
 function updateActiveMember() {

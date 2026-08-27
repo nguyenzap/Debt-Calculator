@@ -32,6 +32,7 @@
           <button class="nav-item active" type="button" data-view-target="overview" aria-current="page">Overview</button>
           <button class="nav-item" type="button" data-view-target="activity">Activity</button>
           <button class="nav-item" type="button" data-view-target="settle">Settle up</button>
+          <button class="nav-item" type="button" data-view-target="qr">Pay by QR</button>
           <button class="nav-item" type="button" data-view-target="journey">Journey</button>
         </nav>
 
@@ -220,6 +221,49 @@
           </div>
         </section>
 
+        <section class="app-view hidden" id="qrPanel" data-view-panel="qr" aria-labelledby="qrTitle">
+          <div class="view-heading">
+            <div>
+              <p class="eyebrow">Fast payments</p>
+              <h1 id="qrTitle">Scan, pay, and get back to even.</h1>
+              <p class="view-intro">
+                Save your payment QR once so anyone in the group can find it when they need to pay you.
+              </p>
+            </div>
+          </div>
+
+          <div class="qr-layout">
+            <section class="surface qr-manager" aria-labelledby="myQrTitle">
+              <div class="surface-header">
+                <div>
+                  <p class="surface-kicker">Your payment code</p>
+                  <h2 id="myQrTitle"><span id="qrOwnerName">Your</span> QR</h2>
+                  <p>Upload a clear screenshot or photo. The app compresses it before saving.</p>
+                </div>
+              </div>
+              <div class="qr-own-preview" id="myQrPreview"></div>
+              <div class="qr-upload-actions">
+                <input id="qrUploadInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" />
+                <button class="btn btn-primary" type="button" id="qrUploadButton">Upload QR image</button>
+                <button class="btn btn-danger hidden" type="button" id="qrRemoveButton">Remove</button>
+              </div>
+              <p class="qr-help">PNG, JPEG, or WebP up to 15 MB. Keep the QR fully visible and well lit.</p>
+              <p class="qr-status" id="qrUploadStatus" role="status" aria-live="polite"></p>
+            </section>
+
+            <section class="surface qr-gallery-surface" aria-labelledby="qrGalleryTitle">
+              <div class="surface-header compact-header">
+                <div>
+                  <p class="surface-kicker">Group payment codes</p>
+                  <h2 id="qrGalleryTitle">Choose who you&apos;re paying</h2>
+                  <p>Open this tab whenever someone needs a quick way to send money.</p>
+                </div>
+              </div>
+              <div class="qr-gallery" id="qrGallery"></div>
+            </section>
+          </div>
+        </section>
+
         <section class="app-view hidden" id="journeyPanel" data-view-panel="journey" aria-labelledby="journeyTitle">
           <div class="view-heading">
             <div>
@@ -287,6 +331,7 @@
       <button class="mobile-compose" type="button" data-open-entry aria-label="Add a ledger entry">+</button>
       <button class="mobile-nav-item" type="button" data-view-target="settle"><span aria-hidden="true">&#8644;</span><span>Settle</span></button>
       <button class="mobile-nav-item" type="button" data-view-target="journey"><span aria-hidden="true">&#8599;</span><span>Journey</span></button>
+      <button class="mobile-nav-item" type="button" data-view-target="qr"><span aria-hidden="true">&#9638;</span><span>QR</span></button>
     </nav>
 
     <div id="entryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="entryModalTitle" aria-hidden="true">
